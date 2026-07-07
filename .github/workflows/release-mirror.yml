@@ -1,0 +1,413 @@
+name: Build and mirror release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: '21'
+  CODEBERG_API: https://codeberg.org/api/v1
+  CODEBERG_REPOSITORY: ${{ vars.CODEBERG_REPOSITORY }}
+
+jobs:
+  build-linux-deb:
+    name: Build Linux DEB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out mirrored source
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected tag like v0.1.0, got: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build DEB
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          chmod +x ./gradlew
+          ./gradlew :desktopApp:packageDeb \
+            -PappVersion="$VERSION" \
+            --no-daemon \
+            --stacktrace \
+            --no-configuration-cache
+
+      - name: Collect DEB
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          DEB_FILE="$(find desktopApp/build/compose/binaries -type f -name '*.deb' | head -n 1)"
+          test -n "$DEB_FILE"
+          cp "$DEB_FILE" "dist/revq-${VERSION}-linux-x86_64.deb"
+          ls -lh dist
+
+      - name: Upload DEB workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos-dmg:
+    name: Build macOS Apple Silicon DMG
+    runs-on: macos-15
+
+    steps:
+      - name: Check out mirrored source
+        uses: actions/checkout@v4
+
+      - name: Validate Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          echo "Runner architecture: $ARCH"
+          test "$ARCH" = "arm64"
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected tag like v0.1.0, got: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          architecture: arm64
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build unsigned DMG
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          chmod +x ./gradlew
+
+          echo "=== JAVA ==="
+          java -version
+
+          echo
+          echo "=== GRADLE ==="
+          ./gradlew --version
+
+          echo
+          echo "=== JPACKAGE ==="
+          which jpackage || true
+          jpackage --version || true
+
+          echo
+          echo "=== BUILD ==="
+
+          set +e
+          ./gradlew :desktopApp:packageDmg \
+            -PappVersion="$VERSION" \
+            --no-daemon \
+            --no-configuration-cache \
+            --stacktrace \
+            --info \
+            --console=plain \
+            2>&1 | tee gradle-dmg.log
+
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "$BUILD_EXIT_CODE" -ne 0 ]]; then
+            echo
+            echo "========================================"
+            echo "FAILURE CONTEXT"
+            echo "========================================"
+
+            grep -nE \
+              -B 10 \
+              -A 40 \
+              'What went wrong|Execution failed for task|Caused by:|jpackage|Exception|Error:|error:' \
+              gradle-dmg.log \
+              | tail -n 500 \
+              || true
+
+            echo "========================================"
+            echo "JPACKAGE ERROR LOG"
+            echo "========================================"
+            find desktopApp/build/compose/logs -name "*-err.txt" -exec cat {} \; || true
+
+            echo "========================================"
+            echo "JPACKAGE OUT LOG"
+            echo "========================================"
+            find desktopApp/build/compose/logs -name "*-out.txt" -exec cat {} \; || true
+
+            echo "========================================"
+            echo "JPACKAGE ARGUMENT FILES"
+            echo "========================================"
+            find desktopApp/build/compose/tmp -name "*.args.txt" -exec sh -c 'echo "===== $1 ====="; cat "$1"' sh {} \; || true
+
+            echo
+            echo "========================================"
+            echo "LAST 300 LINES"
+            echo "========================================"
+
+            tail -n 300 gradle-dmg.log
+          fi
+
+          exit "$BUILD_EXIT_CODE"
+
+      - name: Upload DMG diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-diagnostics
+          path: |
+            gradle-dmg.log
+            desktopApp/build/compose/logs/**/*.txt
+            desktopApp/build/compose/tmp/*.args.txt
+            build/reports/problems/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Collect DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          DMG_FILE="$(find desktopApp/build/compose/binaries -type f -name '*.dmg' | head -n 1)"
+          test -n "$DMG_FILE"
+          cp "$DMG_FILE" "dist/revq-${VERSION}-macos-arm64.dmg"
+          ls -lh dist
+
+      - name: Upload DMG workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to GitHub and Codeberg
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux-deb
+      - build-macos-dmg
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CODEBERG_RELEASE_TOKEN: ${{ secrets.CODEBERG_RELEASE_TOKEN }}
+
+    steps:
+      - name: Validate Codeberg configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CODEBERG_REPOSITORY" || {
+            echo "Missing GitHub repository variable CODEBERG_REPOSITORY, expected owner/repo" >&2
+            exit 1
+          }
+          test -n "$CODEBERG_RELEASE_TOKEN" || {
+            echo "Missing GitHub secret CODEBERG_RELEASE_TOKEN" >&2
+            exit 1
+          }
+          [[ "$CODEBERG_REPOSITORY" == */* ]] || {
+            echo "CODEBERG_REPOSITORY must look like owner/repo" >&2
+            exit 1
+          }
+
+      - name: Download built packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.deb *.dmg > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Read Codeberg release metadata
+        id: codeberg_release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RELEASE_URL="$CODEBERG_API/repos/$CODEBERG_REPOSITORY/releases/tags/$GITHUB_REF_NAME"
+
+          # A push mirror can deliver the tag to GitHub very quickly. Retry briefly
+          # in case the Codeberg release page is still becoming visible via the API.
+          for attempt in $(seq 1 12); do
+            HTTP_STATUS="$(curl -sS \
+              -o codeberg-release.json \
+              -w '%{http_code}' \
+              -H "Authorization: token $CODEBERG_RELEASE_TOKEN" \
+              -H 'Accept: application/json' \
+              "$RELEASE_URL")"
+
+            if [[ "$HTTP_STATUS" == "200" ]]; then
+              break
+            fi
+
+            echo "Codeberg release lookup returned HTTP $HTTP_STATUS (attempt $attempt/12)"
+            sleep 5
+          done
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "Codeberg release $GITHUB_REF_NAME was not available after retries; last HTTP status: $HTTP_STATUS" >&2
+            cat codeberg-release.json >&2 || true
+            exit 1
+          fi
+
+          test -s codeberg-release.json || {
+            echo "Codeberg release metadata was not returned" >&2
+            exit 1
+          }
+
+          RELEASE_ID="$(jq -r '.id // empty' codeberg-release.json)"
+          test -n "$RELEASE_ID" || {
+            echo "Could not resolve Codeberg release id for $GITHUB_REF_NAME" >&2
+            cat codeberg-release.json >&2
+            exit 1
+          }
+
+          TITLE="$(jq -r '.name // empty' codeberg-release.json)"
+          if [[ -z "$TITLE" ]]; then
+            TITLE="$GITHUB_REF_NAME"
+          fi
+
+          PRERELEASE="$(jq -r '.prerelease // false' codeberg-release.json)"
+          jq -r '.body // ""' codeberg-release.json > release-notes.md
+
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          {
+            echo 'title<<EOF_TITLE'
+            echo "$TITLE"
+            echo 'EOF_TITLE'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update mirrored GitHub release
+        shell: bash
+        env:
+          RELEASE_TITLE: ${{ steps.codeberg_release.outputs.title }}
+          RELEASE_PRERELEASE: ${{ steps.codeberg_release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          TAG="$GITHUB_REF_NAME"
+          TITLE="$RELEASE_TITLE"
+          PRERELEASE="$RELEASE_PRERELEASE"
+
+          jq -n \
+            --arg tag_name "$TAG" \
+            --arg name "$TITLE" \
+            --rawfile body release-notes.md \
+            --argjson prerelease "$PRERELEASE" \
+            '{tag_name: $tag_name, name: $name, body: $body, draft: false, prerelease: $prerelease}' \
+            > github-release-payload.json
+
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > github-release.json 2>/dev/null; then
+            RELEASE_ID="$(jq -r '.id' github-release.json)"
+            gh api \
+              --method PATCH \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              --input github-release-payload.json \
+              > /dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/$GITHUB_REPOSITORY/releases" \
+              --input github-release-payload.json \
+              > /dev/null
+          fi
+
+          gh release upload "$TAG" dist/* --clobber
+
+      - name: Upload packages to Codeberg release
+        shell: bash
+        env:
+          CODEBERG_RELEASE_ID: ${{ steps.codeberg_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_ID="$CODEBERG_RELEASE_ID"
+          RELEASE_JSON='codeberg-release.json'
+
+          for FILE in dist/*; do
+            NAME="$(basename "$FILE")"
+
+            # Make reruns idempotent by deleting an older asset with the same name.
+            EXISTING_ASSET_ID="$(
+              jq -r --arg name "$NAME" '.assets[]? | select(.name == $name) | .id' "$RELEASE_JSON" \
+                | head -n 1
+            )"
+
+            if [[ -n "$EXISTING_ASSET_ID" ]]; then
+              curl --fail-with-body -sS \
+                -X DELETE \
+                -H "Authorization: token $CODEBERG_RELEASE_TOKEN" \
+                "$CODEBERG_API/repos/$CODEBERG_REPOSITORY/releases/$RELEASE_ID/assets/$EXISTING_ASSET_ID"
+            fi
+
+            ENCODED_NAME="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$NAME")"
+
+            echo "Uploading $NAME to Codeberg release $GITHUB_REF_NAME"
+            curl --fail-with-body -sS \
+              -X POST \
+              -H "Authorization: token $CODEBERG_RELEASE_TOKEN" \
+              -H 'Accept: application/json' \
+              -F "attachment=@$FILE" \
+              "$CODEBERG_API/repos/$CODEBERG_REPOSITORY/releases/$RELEASE_ID/assets?name=$ENCODED_NAME" \
+              > /dev/null
+          done
+
+      - name: Release summary
+        shell: bash
+        run: |
+          {
+            echo "## Release $GITHUB_REF_NAME published"
+            echo
+            echo "Published assets to:"
+            echo "- GitHub release mirror"
+            echo "- Codeberg canonical release"
+            echo
+            echo "Assets:"
+            find dist -maxdepth 1 -type f -printf -- '- %f\n' | sort
+          } >> "$GITHUB_STEP_SUMMARY"
