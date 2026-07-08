@@ -3,6 +3,7 @@ package eu.revq.ui.commandpalette
 import eu.revq.PullRequest
 import eu.revq.View
 import eu.revq.commands.AppCommand
+import eu.revq.commands.CommandId
 
 enum class PaletteSection(val label: String) {
     Actions("Actions"),
@@ -34,12 +35,22 @@ sealed interface PaletteResult {
     ) : PaletteResult {
         override val stableKey: String = "command:${command.id.name}:${section.name}"
         override val title: String = command.title
-        override val subtitle: String? = if (enabled) command.description else disabledReason ?: command.description
+        override val subtitle: String? = if (enabled) {
+            command.description
+        } else {
+            disabledReason
+                ?.takeIf { it.isNotBlank() }
+                ?: command.description
+                    ?.takeIf { it.isNotBlank() }
+                ?: "Unavailable right now."
+        }
         override val shortcutLabel: String? = command.shortcut?.displayLabel
         override val searchableText: String = buildString {
             append(command.title)
             append(' ')
             append(command.description.orEmpty())
+            append(' ')
+            append(disabledReason.orEmpty())
             append(' ')
             append(command.aliases.joinToString(" "))
             append(' ')
@@ -92,4 +103,43 @@ sealed interface PaletteResult {
         override val enabled: Boolean = true
         override val searchableText: String = "top first item list"
     }
+}
+
+fun PaletteResult.executionPreview(): String = when (this) {
+    is PaletteResult.CommandResult -> if (enabled) {
+        when (command.id) {
+            CommandId.ClearFilter -> "Clear the active pull request filter"
+            CommandId.EndReviewSession -> "End the current review session"
+            CommandId.ToggleMuteSelectedRepository -> "Hide or restore the selected repository"
+            CommandId.ToggleSelectedPrPin -> "Pin or unpin the selected pull request"
+            CommandId.OpenSelectedPrInGitHub -> "Open the selected pull request in GitHub"
+            else -> "Run ${command.title}"
+        }
+    } else {
+        "Unavailable: ${subtitle ?: "This command cannot run now."}"
+    }
+
+    is PaletteResult.PullRequestResult -> {
+        "Open #${pullRequest.number} in ${targetView.label}"
+    }
+
+    is PaletteResult.RepositoryResult -> {
+        "Filter current view to $repository"
+    }
+
+    is PaletteResult.ShortcutResult -> {
+        "Reference shortcut only"
+    }
+
+    PaletteResult.GoToTopResult -> {
+        "Jump to the first item in the focused region"
+    }
+}
+
+fun PaletteResult.typeLabel(): String = when (this) {
+    is PaletteResult.CommandResult -> "Command"
+    is PaletteResult.PullRequestResult -> "PR"
+    is PaletteResult.RepositoryResult -> "Repo"
+    is PaletteResult.ShortcutResult -> "Shortcut"
+    PaletteResult.GoToTopResult -> "Nav"
 }

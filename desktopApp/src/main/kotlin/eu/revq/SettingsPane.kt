@@ -396,17 +396,6 @@ private fun GeneralSettings(state: AppState) {
                 state.saveConfig()
             },
         )
-        SettingsDivider()
-        ChoiceSettingRow(
-            title = "Default grouping",
-            description = "Group queues by repository outside the Today view.",
-            value = if (state.groupByRepository) "Repository" else "None",
-            options = listOf("None", "Repository"),
-            onSelected = {
-                state.groupByRepository = it == "Repository"
-                state.saveConfig()
-            },
-        )
     }
 }
 

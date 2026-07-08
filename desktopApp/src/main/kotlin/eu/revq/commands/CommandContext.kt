@@ -15,6 +15,8 @@ data class CommandContext(
     val isDiscovering: Boolean,
     val isTestingGh: Boolean,
     val canUndoReview: Boolean,
+    val hasActiveFilter: Boolean,
+    val canGoPreviousReview: Boolean,
 ) {
     val hasSelectedPullRequest: Boolean
         get() = selectedPullRequest != null
@@ -30,6 +32,8 @@ data class CommandContext(
             isDiscovering = state.isDiscovering,
             isTestingGh = state.isTestingGh,
             canUndoReview = state.lastUndoReview != null,
+            hasActiveFilter = state.searchQuery.isNotBlank(),
+            canGoPreviousReview = eu.revq.canGoPrevious(state),
         )
     }
 }

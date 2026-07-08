@@ -48,6 +48,15 @@ object CommandRegistry {
             disabledReason = { "Nothing reviewed in this session to undo." },
         ),
         AppCommand(
+            id = CommandId.PreviousReview,
+            title = "Previous review",
+            description = "Move to the previous pull request in the review queue.",
+            category = CommandCategory.Review,
+            aliases = listOf("previous", "back", "prior review"),
+            isEnabled = { it.canGoPreviousReview },
+            disabledReason = { "No previous review is available." },
+        ),
+        AppCommand(
             id = CommandId.NextReview,
             title = "Skip for now",
             description = "Leave the current review in the queue and move to the next one.",
@@ -56,6 +65,15 @@ object CommandRegistry {
             shortcut = Shortcut.single(ShortcutKey.S),
             isEnabled = { it.reviewQueueSize > 0 },
             disabledReason = { "No PRs need review right now." },
+        ),
+        AppCommand(
+            id = CommandId.EndReviewSession,
+            title = "End review session",
+            description = "Leave the focused review session and keep the current queue intact.",
+            category = CommandCategory.Review,
+            aliases = listOf("end session", "stop reviewing", "exit session"),
+            isEnabled = { it.reviewSessionActive },
+            disabledReason = { "No review session is active." },
         ),
         AppCommand(
             id = CommandId.OpenSelectedPrInGitHub,
@@ -131,7 +149,7 @@ object CommandRegistry {
             id = CommandId.GoToNeedsReview,
             title = "Go to Needs Review",
             category = CommandCategory.Navigate,
-            aliases = listOf("reviews", "queue", "review queue", "needs review"),
+            aliases = listOf("reviews", "queue", "review queue", "needs review", "close settings", "exit settings", "back to reviews"),
         ),
         AppCommand(
             id = CommandId.GoToPinned,
@@ -185,6 +203,46 @@ object CommandRegistry {
             shortcut = Shortcut.single(ShortcutKey.R),
             isEnabled = { !it.isRefreshing },
             disabledReason = { "Refresh is already running." },
+        ),
+        AppCommand(
+            id = CommandId.ClearFilter,
+            title = "Clear active filter",
+            description = "Clear the palette-applied pull request filter.",
+            category = CommandCategory.System,
+            aliases = listOf("clear filter", "clear search", "remove filter", "show all"),
+            isEnabled = { it.hasActiveFilter },
+            disabledReason = { "No filter is active." },
+        ),
+        AppCommand(
+            id = CommandId.ToggleGroupByRepository,
+            title = "Toggle repository grouping",
+            description = "Group or ungroup the current pull request list by repository.",
+            category = CommandCategory.System,
+            aliases = listOf("group", "group by repository", "ungroup", "repository sections"),
+            isEnabled = { it.view != eu.revq.View.Today && it.view != eu.revq.View.Settings },
+            disabledReason = {
+                if (it.view == eu.revq.View.Today) {
+                    "Today already uses fixed sections."
+                } else {
+                    "Repository grouping is not available here."
+                }
+            },
+        ),
+        AppCommand(
+            id = CommandId.ToggleCompactRows,
+            title = "Toggle compact rows",
+            description = "Switch pull request rows between compact and comfortable density.",
+            category = CommandCategory.System,
+            aliases = listOf("rows", "compact rows", "comfortable rows", "density"),
+        ),
+        AppCommand(
+            id = CommandId.CycleSortMode,
+            title = "Cycle sort mode",
+            description = "Move to the next pull request sort mode.",
+            category = CommandCategory.System,
+            aliases = listOf("sort", "cycle sort", "sort mode", "order"),
+            isEnabled = { it.view != eu.revq.View.Settings },
+            disabledReason = { "Sorting is not available in Settings." },
         ),
         AppCommand(
             id = CommandId.TestGitHubCli,

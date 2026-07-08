@@ -97,3 +97,29 @@ fun nextKeyboardAction(state: AppState): KeyboardHint? {
         else -> null
     }
 }
+
+fun activeKeyboardRegionLabel(
+    state: AppState,
+    paletteOpen: Boolean,
+): String = when {
+    paletteOpen -> "Palette"
+    state.keyboardMode == KeyboardMode.Insert -> "Typing"
+    state.view == View.Settings -> "Settings"
+    state.keyboardFocusRegion == FocusRegion.Sidebar -> "Sidebar"
+    state.keyboardFocusRegion == FocusRegion.PullRequestList -> "Pull requests"
+    state.keyboardFocusRegion == FocusRegion.ReviewBrief -> "Review brief"
+    else -> "Workspace"
+}
+
+fun compactKeyboardHints(
+    state: AppState,
+    paletteOpen: Boolean,
+): List<KeyboardHint> {
+    if (paletteOpen) {
+        return keyboardHints(state, paletteOpen = true)
+    }
+
+    return keyboardHints(state, paletteOpen = false)
+        .filterNot { it.key == "Space" }
+        .take(2)
+}

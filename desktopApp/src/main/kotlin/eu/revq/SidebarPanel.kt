@@ -74,7 +74,7 @@ import java.util.concurrent.TimeUnit
 import eu.revq.keyboard.FocusRegion
 import eu.revq.keyboard.KeyboardMode
 
-private val SidebarSelectedBackground = Color(0xFF22272D)
+private val SidebarSelectedBackground = Color(0xFF1D2227)
 private val SidebarOliveSoft = Color(0xFF2C3323)
 private val SidebarRoseSoft = Color(0xFF3B2427)
 private val SidebarReadySoft = Color(0xFF21352A)
@@ -1164,5 +1164,4 @@ private fun avatarFallback(login: String): String = login
     .take(2)
     .uppercase()
     .ifBlank { "GH" }
-
 

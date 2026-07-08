@@ -79,6 +79,41 @@ class KeyboardUxModelTest {
         )
     }
 
+    @Test
+    fun activeKeyboardRegionLabelNamesTheCurrentKeyboardTarget() {
+        val state = AppState().apply {
+            keyboardFocusRegion = FocusRegion.ReviewBrief
+        }
+
+        assertEquals("Review brief", activeKeyboardRegionLabel(state, paletteOpen = false))
+        assertEquals("Palette", activeKeyboardRegionLabel(state, paletteOpen = true))
+
+        state.keyboardMode = KeyboardMode.Insert
+        assertEquals("Typing", activeKeyboardRegionLabel(state, paletteOpen = false))
+
+        state.selectView(eu.revq.View.Settings)
+        state.keyboardMode = KeyboardMode.Normal
+        assertEquals("Settings", activeKeyboardRegionLabel(state, paletteOpen = false))
+    }
+
+    @Test
+    fun compactKeyboardHintsKeepBottomBarFocused() {
+        val review = pullRequest(PullRequestSource.ReviewRequest)
+        val state = AppState().apply {
+            pullRequests = listOf(review)
+            selectedPullRequest = review
+            keyboardFocusRegion = FocusRegion.PullRequestList
+        }
+
+        assertEquals(
+            listOf(
+                KeyboardHint("j/k", "Move"),
+                KeyboardHint("o", "GitHub"),
+            ),
+            compactKeyboardHints(state, paletteOpen = false),
+        )
+    }
+
     private fun pullRequest(
         source: PullRequestSource,
         checksFailing: Int = 0,

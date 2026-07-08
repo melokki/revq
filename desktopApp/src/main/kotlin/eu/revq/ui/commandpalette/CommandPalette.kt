@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,11 +21,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardCommandKey
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Divider
+import androidx.compose.material3.DividerDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -80,6 +82,7 @@ fun CommandPalette(
     val paletteFocusRequester = remember { FocusRequester() }
     val executor = remember(state) { CommandExecutor(state) }
     val quickRunLabels = quickRunShortcutLabels(results)
+    val selectedResult = results.getOrNull(paletteState.selectedIndex)
 
     LaunchedEffect(results.map { it.stableKey to it.enabled }) {
         paletteState.clampSelection(results.size)
@@ -121,6 +124,7 @@ fun CommandPalette(
             }
 
             is PaletteResult.PullRequestResult -> {
+                state.recordPaletteTarget("pr:${result.pullRequest.key}")
                 state.searchQuery = ""
                 state.selectView(result.targetView)
                 state.selectedPullRequest = result.pullRequest
@@ -129,6 +133,7 @@ fun CommandPalette(
             }
 
             is PaletteResult.RepositoryResult -> {
+                state.recordPaletteTarget("repo:${result.repository}")
                 if (state.view == eu.revq.View.Settings) {
                     state.selectView(eu.revq.View.NeedsReview)
                 }
@@ -153,8 +158,8 @@ fun CommandPalette(
     Dialog(onDismissRequest = paletteState::close) {
         Surface(
             modifier = Modifier
-                .width(760.dp)
-                .heightIn(max = 700.dp)
+                .width(800.dp)
+                .heightIn(max = 620.dp)
                 .focusRequester(paletteFocusRequester)
                 .focusable()
                 .onPreviewKeyEvent { event ->
@@ -168,7 +173,7 @@ fun CommandPalette(
                     )
                 },
             color = PanelBg,
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(14.dp),
             border = BorderStroke(1.dp, Border),
         ) {
             Column {
@@ -184,6 +189,7 @@ fun CommandPalette(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
+                            .height(46.dp)
                             .focusRequester(queryFocusRequester),
                         singleLine = true,
                         placeholder = {
@@ -203,16 +209,18 @@ fun CommandPalette(
                     QuickModePrompt(mode)
                 }
 
-                Spacer(Modifier.size(12.dp))
-                Divider(color = Border)
+                Spacer(Modifier.size(10.dp))
+                HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
 
                 if (results.isEmpty()) {
-                    PaletteEmptyState(mode, paletteState.query)
+                    PaletteEmptyState(paletteState.query)
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.heightIn(max = 520.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 380.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         itemsIndexed(
                             items = results,
@@ -234,7 +242,11 @@ fun CommandPalette(
                     }
                 }
 
-                Divider(color = Border)
+                selectedResult?.let {
+                    HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+                    PaletteExecutionPreview(it)
+                }
+                HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
                 PaletteFooter(mode)
             }
         }
@@ -362,14 +374,21 @@ private fun PaletteResultRow(
         Spacer(Modifier.size(10.dp))
 
         Column(Modifier.weight(1f)) {
-            Text(
-                text = result.title,
-                color = if (result.enabled) TextPrimary else TextMuted.copy(alpha = 0.45f),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                ResultTypePill(result.typeLabel(), selected)
+                Text(
+                    text = result.title,
+                    color = if (result.enabled) TextPrimary else TextMuted.copy(alpha = 0.45f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             result.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
                 Text(
                     text = subtitle,
@@ -381,27 +400,99 @@ private fun PaletteResultRow(
             }
         }
 
-        val trailingShortcut = quickRunLabel ?: result.shortcutLabel
-        trailingShortcut?.let { shortcut ->
+        quickRunLabel?.let { shortcut ->
             Spacer(Modifier.size(10.dp))
-            Text(
-                text = shortcut,
-                color = if (selected) TextPrimary else TextMuted,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF15181C))
-                    .border(1.dp, Border, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 7.dp, vertical = 3.dp),
-            )
+            QuickRunPill(shortcut, selected)
+        } ?: result.shortcutLabel?.let { shortcut ->
+            Spacer(Modifier.size(10.dp))
+            ShortcutPill(shortcut, selected)
         }
     }
 }
 
 @Composable
+private fun ResultTypePill(
+    label: String,
+    selected: Boolean,
+) {
+    Text(
+        text = label,
+        color = if (selected) Olive else TextMuted,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Border, RoundedCornerShape(999.dp))
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    )
+}
+
+@Composable
+private fun QuickRunPill(
+    label: String,
+    selected: Boolean,
+) {
+    Text(
+        text = label,
+        color = if (selected) Color(0xFF151812) else Olive,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) Olive else Color(0xFF2C3323))
+            .border(1.dp, Olive.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    )
+}
+
+@Composable
+private fun ShortcutPill(
+    label: String,
+    selected: Boolean,
+) {
+    Text(
+        text = label,
+        color = if (selected) TextPrimary else TextMuted,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Border, RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    )
+}
+
+@Composable
+private fun PaletteExecutionPreview(result: PaletteResult) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF15181C))
+            .padding(horizontal = 18.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Next",
+            color = Olive,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = result.executionPreview(),
+            color = if (result.enabled) TextPrimary else TextMuted,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun PaletteEmptyState(
-    mode: PaletteMode,
     query: String,
 ) {
     Column(
@@ -476,7 +567,7 @@ private fun PaletteFooterHint(
 
 private fun paletteResultIcon(result: PaletteResult): ImageVector = when (result) {
     is PaletteResult.CommandResult -> Icons.Rounded.KeyboardCommandKey
-    is PaletteResult.PullRequestResult -> Icons.Rounded.OpenInNew
+    is PaletteResult.PullRequestResult -> Icons.AutoMirrored.Rounded.OpenInNew
     is PaletteResult.RepositoryResult -> Icons.Rounded.FolderOpen
     is PaletteResult.ShortcutResult -> Icons.Rounded.KeyboardCommandKey
     PaletteResult.GoToTopResult -> Icons.Rounded.KeyboardCommandKey

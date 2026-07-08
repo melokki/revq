@@ -58,6 +58,22 @@ class CommandPaletteModelTest {
     }
 
     @Test
+    fun blankUniversalPaletteShowsRecentPaletteTargets() {
+        val review = reviewRequest(title = "Recent keyboard target")
+        val state = AppState().apply {
+            pullRequests = listOf(review)
+            repositoriesText = "acme/mobile"
+            recordPaletteTarget("repo:acme/mobile")
+            recordPaletteTarget("pr:${review.key}")
+        }
+
+        val results = PaletteResultProvider.results(PaletteMode.Universal, state, "")
+
+        assertTrue(results.filterIsInstance<PaletteResult.PullRequestResult>().any { it.pullRequest.key == review.key })
+        assertTrue(results.filterIsInstance<PaletteResult.RepositoryResult>().any { it.repository == "acme/mobile" })
+    }
+
+    @Test
     fun shortcutReferenceDoesNotAdvertiseRemovedPaletteOpeners() {
         val shortcuts = PaletteResultProvider.results(PaletteMode.Universal, AppState(), "keyboard shortcuts")
             .filterIsInstance<PaletteResult.ShortcutResult>()
@@ -107,6 +123,65 @@ class CommandPaletteModelTest {
 
         assertFalse(startReview.enabled)
         assertEquals("No PRs need review right now.", startReview.subtitle)
+    }
+
+    @Test
+    fun selectedResultPreviewDescribesWhatEnterWillDo() {
+        val pullRequest = reviewRequest()
+        val prResult = PaletteResult.PullRequestResult(
+            pullRequest = pullRequest,
+            targetView = eu.revq.View.NeedsReview,
+            subtitle = "acme/mobile · Needs your review",
+            searchableText = "keyboard palette",
+        )
+        val repositoryResult = PaletteResult.RepositoryResult("acme/mobile")
+        val disabledCommand = PaletteResult.CommandResult(
+            command = CommandRegistry.find(CommandId.GoToNeedsReview)!!,
+            section = PaletteSection.Actions,
+            enabled = false,
+            disabledReason = null,
+        )
+
+        assertEquals("Open #42 in Needs Review", prResult.executionPreview())
+        assertEquals("Filter current view to acme/mobile", repositoryResult.executionPreview())
+        assertEquals("Unavailable: Unavailable right now.", disabledCommand.executionPreview())
+    }
+
+    @Test
+    fun commandPreviewExplainsSensitiveActions() {
+        val clearFilter = PaletteResult.CommandResult(
+            command = CommandRegistry.find(CommandId.ClearFilter)!!,
+            section = PaletteSection.Actions,
+            enabled = true,
+        )
+        val endSession = PaletteResult.CommandResult(
+            command = CommandRegistry.find(CommandId.EndReviewSession)!!,
+            section = PaletteSection.Actions,
+            enabled = true,
+        )
+
+        assertEquals("Clear the active pull request filter", clearFilter.executionPreview())
+        assertEquals("End the current review session", endSession.executionPreview())
+    }
+
+    @Test
+    fun paletteResultsExposeDomainTypeLabels() {
+        val pullRequest = PaletteResult.PullRequestResult(
+            pullRequest = reviewRequest(),
+            targetView = eu.revq.View.NeedsReview,
+            subtitle = "acme/mobile · Needs your review",
+            searchableText = "keyboard palette",
+        )
+        val repository = PaletteResult.RepositoryResult("acme/mobile")
+        val command = PaletteResult.CommandResult(
+            command = CommandRegistry.find(CommandId.Refresh)!!,
+            section = PaletteSection.System,
+            enabled = true,
+        )
+
+        assertEquals("PR", pullRequest.typeLabel())
+        assertEquals("Repo", repository.typeLabel())
+        assertEquals("Command", command.typeLabel())
     }
 
     private fun List<PaletteResult>.anyCommand(

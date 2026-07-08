@@ -37,13 +37,16 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,8 +55,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -188,29 +194,20 @@ private fun ReviewBriefHeader(
                 modifier = Modifier.weight(1f),
             )
 
-            IconButton(
+            BriefIconAction(
+                label = if (state.isPinned(pr)) "Unpin pull request" else "Pin pull request",
+                icon = if (state.isPinned(pr)) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                tint = if (state.isPinned(pr)) Olive else TextMuted,
+                state = state,
                 onClick = { state.togglePin(pr) },
-                modifier = Modifier.size(34.dp),
-            ) {
-                Icon(
-                    imageVector = if (state.isPinned(pr)) Icons.Rounded.Star else Icons.Rounded.StarBorder,
-                    contentDescription = if (state.isPinned(pr)) "Unpin pull request" else "Pin pull request",
-                    tint = if (state.isPinned(pr)) Olive else TextMuted,
-                    modifier = Modifier.size(19.dp),
-                )
-            }
+            )
 
-            IconButton(
+            BriefIconAction(
+                label = "Close review brief",
+                icon = Icons.Rounded.Close,
+                state = state,
                 onClick = onClose,
-                modifier = Modifier.size(34.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Close review brief",
-                    tint = TextMuted,
-                    modifier = Modifier.size(19.dp),
-                )
-            }
+            )
         }
 
         Text(
@@ -680,18 +677,46 @@ private fun ReviewQueueSection(
         else -> (queue.size - position).coerceAtLeast(0)
     }
 
-    ReviewBriefSection(
-        label = "QUEUE",
-        body = when {
-            position != null -> "Review $position of ${queue.size}"
-            else -> queuePositionCopy(state, pr)
-        },
-        detail = when {
-            state.reviewSessionActive && remaining > 0 -> "$remaining reviews remain after this one."
-            state.reviewSessionActive -> "This is the last review in the current queue."
-            else -> "Start or continue a review session from the main workspace."
-        },
-    )
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        ReviewBriefSection(
+            label = "QUEUE",
+            body = when {
+                position != null -> "Review $position of ${queue.size}"
+                else -> queuePositionCopy(state, pr)
+            },
+            detail = when {
+                state.reviewSessionActive && remaining > 0 -> "$remaining reviews remain after this one."
+                state.reviewSessionActive -> "This is the last review in the current queue."
+                else -> "Start or continue a review session from the main workspace."
+            },
+        )
+
+        if (state.reviewSessionActive && position != null && queue.isNotEmpty()) {
+            ReviewQueueRail(position = position, total = queue.size)
+        }
+    }
+}
+
+@Composable
+private fun ReviewQueueRail(
+    position: Int,
+    total: Int,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        repeat(total.coerceAtMost(12)) { index ->
+            val active = index < position
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (active) Olive else Border),
+            )
+        }
+    }
 }
 
 @Composable
@@ -715,22 +740,20 @@ private fun ReviewBriefActionBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(
+            BriefIconAction(
+                label = "Open selected PR in GitHub",
+                icon = Icons.Rounded.OpenInBrowser,
+                tint = Olive,
+                state = state,
                 onClick = { openUrl(pr.url) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Olive,
-                    contentColor = Color(0xFF151812),
-                ),
+            )
+
+            Text(
+                text = "Open in GitHub",
+                color = TextMuted,
+                style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.OpenInBrowser,
-                    contentDescription = null,
-                    modifier = Modifier.size(17.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Open in GitHub")
-            }
+            )
 
             ReviewBriefOverflowMenu(
                 state = state,
@@ -789,6 +812,55 @@ private fun ReviewBriefActionBar(
                     Spacer(Modifier.weight(1f))
                     ShortcutPill("Space")
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BriefIconAction(
+    label: String,
+    icon: ImageVector,
+    state: AppState,
+    tint: Color = TextMuted,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
+        state = androidx.compose.material3.rememberTooltipState(),
+        tooltip = {
+            PlainTooltip(
+                containerColor = PanelElevated,
+                contentColor = TextPrimary,
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+    ) {
+        Surface(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .semantics { contentDescription = label }
+                .onFocusChanged { focusState ->
+                    if (focusState.isFocused) state.statusLine = "Enter $label"
+                }
+                .clickable(onClick = onClick),
+            color = PanelElevated,
+            border = BorderStroke(1.dp, Border),
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = tint,
+                    modifier = Modifier.size(19.dp),
+                )
             }
         }
     }

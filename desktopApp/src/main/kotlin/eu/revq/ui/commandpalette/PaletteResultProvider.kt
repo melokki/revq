@@ -42,11 +42,13 @@ object PaletteResultProvider {
                         commandResult(command, PaletteSection.Recent, context)
                     }
                 }
+            val recentTargets = recentTargetResults(state)
 
             val suggestedIds = listOf(
                 CommandId.GoToNeedsReview,
                 CommandId.GoToSettings,
                 CommandId.Refresh,
+                CommandId.ToggleCompactRows,
                 CommandId.ShowKeyboardShortcuts,
             )
             val usedIds = contextualIds + recent.map { it.command.id }
@@ -57,7 +59,7 @@ object PaletteResultProvider {
                     commandResult(command, PaletteSection.Suggested, context)
                 }
 
-            return contextual + recent + suggested
+            return contextual + recentTargets + recent + suggested
         }
 
         return commandResults(state) +
@@ -95,6 +97,16 @@ object PaletteResultProvider {
         val selected = state.selectedPullRequest
 
         val ids = buildList {
+            if (state.searchQuery.isNotBlank()) {
+                add(CommandId.ClearFilter)
+            }
+
+            if (state.reviewSessionActive) {
+                add(CommandId.PreviousReview)
+                add(CommandId.NextReview)
+                add(CommandId.EndReviewSession)
+            }
+
             if (state.reviewQueue().isNotEmpty() && !state.reviewSessionActive) {
                 add(CommandId.StartReviewSession)
             }
@@ -143,10 +155,10 @@ object PaletteResultProvider {
 
         val identities = buildList {
             pr.authorLogin?.let(::add)
-            addAll(pr.requestedReviewers.orEmpty())
-            addAll(pr.changeRequestReviewers.orEmpty())
-            addAll(pr.approvingReviewers.orEmpty())
-            addAll(pr.unresolvedDiscussionAuthors.orEmpty())
+            addAll(pr.requestedReviewers)
+            addAll(pr.changeRequestReviewers)
+            addAll(pr.approvingReviewers)
+            addAll(pr.unresolvedDiscussionAuthors)
         }
 
         val subtitle = buildString {
@@ -205,6 +217,36 @@ object PaletteResultProvider {
             .filterNot(state::isRepositoryMuted)
 
         return repositories.map { PaletteResult.RepositoryResult(it) }
+    }
+
+    private fun recentTargetResults(state: AppState): List<PaletteResult> {
+        val pullRequests = state.activePullRequests().associateBy { it.key }
+        val repositories = (
+                state.activePullRequests().map { it.repository.toString() } +
+                        parseLines(state.repositoriesText)
+                )
+            .distinct()
+            .toSet()
+
+        return state.recentPaletteTargets.mapNotNull { target ->
+            when {
+                target.startsWith("pr:") -> {
+                    val pr = pullRequests[target.removePrefix("pr:")] ?: return@mapNotNull null
+                    pullRequestResult(pr, defaultTargetView(state, pr))
+                }
+                target.startsWith("repo:") -> {
+                    val repo = target.removePrefix("repo:")
+                    if (repo in repositories) PaletteResult.RepositoryResult(repo) else null
+                }
+                else -> null
+            }
+        }.map { result ->
+            when (result) {
+                is PaletteResult.PullRequestResult -> result.copy(subtitle = "Recent · ${result.subtitle}")
+                is PaletteResult.RepositoryResult -> result
+                else -> result
+            }
+        }
     }
 
     private fun shortcutReferenceResults(state: AppState): List<PaletteResult> {

@@ -26,7 +26,6 @@ fun settingsRowLabels(section: SettingsSection): List<String> = when (section) {
         "Auto refresh",
         "Refresh interval",
         "Row density",
-        "Default grouping",
     )
 
     SettingsSection.GitHub -> listOf(
@@ -127,10 +126,6 @@ private fun activateGeneralSettingsRow(state: AppState) {
             state.saveConfig()
         }
 
-        3 -> {
-            state.groupByRepository = !state.groupByRepository
-            state.saveConfig()
-        }
     }
 }
 

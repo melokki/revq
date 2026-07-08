@@ -24,7 +24,6 @@ version = appVersion
 kotlin {
     jvmToolchain {
         languageVersion.set(JavaLanguageVersion.of(21))
-        vendor.set(JvmVendorSpec.ADOPTIUM)
     }
 }
 
@@ -47,9 +46,14 @@ compose.desktop {
             packageName = "RevQ"
             packageVersion = appVersion
 
+            linux {
+                iconFile.set(project.file("../icon.png"))
+            }
+
             macOS {
                 bundleID = "eu.revq.desktop"
                 dockName = "RevQ"
+                iconFile.set(project.file("../icon.png"))
                 packageVersion = macOSPackageVersion
                 packageBuildVersion = macOSPackageVersion
                 // Explicitly disable signing to prevent jpackage exit code 1 on macOS GitHub Actions runners

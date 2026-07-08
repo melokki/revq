@@ -45,4 +45,16 @@ class SettingsKeyboardModelTest {
 
         assertEquals(false, state.autoRefreshEnabled)
     }
+
+    @Test
+    fun activatingTrackingDiscoverRowRunsDiscoveryAction() {
+        val state = AppState().apply {
+            settingsSectionIndex = SettingsSection.Tracking.ordinal
+            settingsFocusedRowIndex = settingsRowLabels(SettingsSection.Tracking).indexOf("Discover repositories")
+        }
+
+        activateFocusedSettingsRow(state)
+
+        assertEquals("Add one or more organizations before discovering repositories.", state.statusLine)
+    }
 }

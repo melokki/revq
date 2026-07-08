@@ -30,7 +30,6 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.KeyboardCommandKey
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Refresh
@@ -41,18 +40,20 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
-import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,6 +70,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,6 +91,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
+import java.awt.EventQueue
 import java.awt.MenuItem
 import java.awt.PopupMenu
 import java.awt.SystemTray
@@ -110,6 +115,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
+import javax.imageio.ImageIO
 import kotlin.io.path.exists
 import kotlin.io.path.readLines
 import kotlin.io.path.writeLines
@@ -122,7 +128,8 @@ import eu.revq.keyboard.KeyboardAction
 import eu.revq.keyboard.KeyboardContext
 import eu.revq.keyboard.KeyboardMode
 import eu.revq.keyboard.KeyboardRouter
-import eu.revq.keyboard.keyboardHints
+import eu.revq.keyboard.activeKeyboardRegionLabel
+import eu.revq.keyboard.compactKeyboardHints
 import eu.revq.keyboard.nextKeyboardAction
 import eu.revq.ui.commandpalette.CommandPalette
 import eu.revq.ui.commandpalette.CommandPaletteState
@@ -216,9 +223,18 @@ fun main() = application {
     }
 
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            if (appState.trayAvailable) {
+                appState.mainWindowVisible = false
+                appState.statusLine = "RevQ is still running in the tray"
+            } else {
+                exitApplication()
+            }
+        },
+        visible = appState.mainWindowVisible,
         state = mainWindowState,
         title = "RevQ",
+        icon = painterResource("icon.png"),
     ) {
         RevqTheme(uiScale = appState.uiScale) {
             RevqApp(appState)
@@ -229,6 +245,7 @@ fun main() = application {
         Window(
             onCloseRequest = { appState.closeReminderWindow() },
             title = "RevQ Review Reminder",
+            icon = painterResource("icon.png"),
             undecorated = true,
             alwaysOnTop = true,
             resizable = false,
@@ -268,6 +285,14 @@ enum class OwnPullRequestStatus {
     WaitingForReviewer,
     NoActionNeeded,
 }
+
+internal val WorkspaceSortModes = listOf(
+    "Urgency",
+    "Updated newest",
+    "Updated oldest",
+    "Repository",
+    "Comments",
+)
 
 data class RepositoryId(val owner: String, val name: String) {
     override fun toString(): String = "$owner/$name"
@@ -363,6 +388,8 @@ class AppState {
     var refreshDone by mutableStateOf(0)
     var refreshTotal by mutableStateOf(0)
     var lastUndoReview by mutableStateOf<HandledUndo?>(null)
+    var mainWindowVisible by mutableStateOf(true)
+    var trayAvailable by mutableStateOf(false)
     var reminderEnabled by mutableStateOf(true)
     var reminderTimeText by mutableStateOf("09:00")
     var reminderDaysText by mutableStateOf("Mon-Fri")
@@ -388,6 +415,7 @@ class AppState {
     var sessionHandledCount by mutableStateOf(0)
     var reviewSessionQueueKeys by mutableStateOf<List<String>>(emptyList())
     var recentCommandIds by mutableStateOf<List<CommandId>>(emptyList())
+    var recentPaletteTargets by mutableStateOf<List<String>>(emptyList())
         private set
 
     // Keyboard-navigation state. Palette state is kept at the UI shell level.
@@ -689,6 +717,10 @@ class AppState {
             if (result.error != null) {
                 statusLine = "Discover failed · ${result.error}"
             } else {
+                if (result.value.orEmpty().isEmpty()) {
+                    statusLine = "Discover found no repositories for the configured organizations."
+                    return@launch
+                }
                 val merged = (parseLines(repositoriesText) + result.value.orEmpty()).distinct().sorted()
                 repositoriesText = merged.joinToString("\n")
                 saveConfig()
@@ -857,6 +889,35 @@ class AppState {
         statusLine = if (focusReviewMode) "Focus review mode enabled" else "Focus review mode disabled"
     }
 
+    fun clearFilter() {
+        searchQuery = ""
+        statusLine = "Filter cleared"
+    }
+
+    fun toggleGroupByRepository() {
+        if (view == View.Today) {
+            statusLine = "Today uses fixed sections"
+            return
+        }
+
+        groupByRepository = !groupByRepository
+        saveConfig()
+        statusLine = if (groupByRepository) "Grouped by repository" else "Grouping off"
+    }
+
+    fun toggleCompactRows() {
+        compactRows = !compactRows
+        saveConfig()
+        statusLine = if (compactRows) "Compact rows on" else "Comfortable rows on"
+    }
+
+    fun cycleSortMode() {
+        val currentIndex = WorkspaceSortModes.indexOf(sortMode).takeIf { it >= 0 } ?: 0
+        sortMode = WorkspaceSortModes[(currentIndex + 1) % WorkspaceSortModes.size]
+        saveConfig()
+        statusLine = "Sort: $sortMode"
+    }
+
     fun isHandledCurrent(pr: PullRequest): Boolean = handledReviewRecords[pr.key] == pr.updatedMarker
 
     fun selectView(next: View) {
@@ -966,6 +1027,10 @@ class AppState {
 
     fun recordCommandExecution(commandId: CommandId) {
         recentCommandIds = (listOf(commandId) + recentCommandIds.filterNot { it == commandId }).take(6)
+    }
+
+    fun recordPaletteTarget(target: String) {
+        recentPaletteTargets = (listOf(target) + recentPaletteTargets.filterNot { it == target }).take(6)
     }
 
     private fun saveCache() {
@@ -1995,6 +2060,7 @@ fun MainToolbar(state: AppState) {
         modifier = Modifier
             .fillMaxWidth()
             .height(96.dp)
+            .background(if (state.reviewSessionActive) Color(0xFF1E241A) else PanelBg)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2016,6 +2082,10 @@ fun MainToolbar(state: AppState) {
 
                 if (state.focusReviewMode && !state.reviewSessionActive) {
                     Pill("Focus", OliveSoft, Olive)
+                }
+
+                reviewSessionProgressPillLabel(state)?.let { progress ->
+                    Pill(progress, OliveSoft, Olive)
                 }
             }
 
@@ -2055,10 +2125,19 @@ fun MainToolbar(state: AppState) {
         }
 
         if (state.reviewSessionActive) {
-            TextButton(
+            Button(
                 onClick = { state.previousReview() },
                 enabled = canGoPrevious(state),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PanelElevated,
+                    contentColor = TextPrimary,
+                    disabledContainerColor = PanelElevated.copy(alpha = 0.45f),
+                    disabledContentColor = TextMuted.copy(alpha = 0.55f),
+                ),
+                border = BorderStroke(1.dp, Border),
             ) {
+                Text("←")
+                Spacer(Modifier.width(6.dp))
                 Text("Previous")
             }
 
@@ -2073,32 +2152,116 @@ fun MainToolbar(state: AppState) {
 
 @Composable
 private fun RefreshAction(state: AppState) {
-    Surface(
-        modifier = Modifier
-            .size(42.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = !state.isRefreshing) {
-                state.refresh()
-            },
-        color = PanelElevated,
-        border = BorderStroke(1.dp, Border),
-        shape = RoundedCornerShape(10.dp),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (state.isRefreshing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(17.dp),
-                    color = Olive,
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.Refresh,
-                    contentDescription = "Refresh",
-                    tint = TextMuted,
-                    modifier = Modifier.size(19.dp),
+    DiscoverableIconAction(
+        label = "Refresh GitHub data",
+        icon = Icons.Rounded.Refresh,
+        enabled = !state.isRefreshing,
+        state = state,
+        onClick = { state.refresh() },
+        loading = state.isRefreshing,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiscoverableIconAction(
+    label: String,
+    icon: ImageVector,
+    state: AppState,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
+        state = androidx.compose.material3.rememberTooltipState(),
+        tooltip = {
+            PlainTooltip(
+                containerColor = PanelElevated,
+                contentColor = TextPrimary,
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
+        },
+    ) {
+        Surface(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .semantics { contentDescription = label }
+                .onFocusChanged { focusState ->
+                    if (focusState.isFocused) state.statusLine = "Enter $label"
+                }
+                .clickable(enabled = enabled) {
+                    onClick()
+                },
+            color = PanelElevated,
+            border = BorderStroke(1.dp, Border),
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(17.dp),
+                        color = Olive,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = if (enabled) TextMuted else TextMuted.copy(alpha = 0.45f),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiscoverableMiniIconAction(
+    label: String,
+    icon: ImageVector,
+    state: AppState,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
+        state = androidx.compose.material3.rememberTooltipState(),
+        tooltip = {
+            PlainTooltip(
+                containerColor = PanelElevated,
+                contentColor = TextPrimary,
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .semantics { contentDescription = label }
+                .onFocusChanged { focusState ->
+                    if (focusState.isFocused) state.statusLine = "Enter $label"
+                }
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = TextMuted,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }
@@ -2112,190 +2275,96 @@ fun WorkspaceControls(state: AppState) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        OutlinedTextField(
-            value = state.searchQuery,
-            onValueChange = { state.searchQuery = it },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = null,
-                    tint = TextMuted,
-                )
-            },
-            trailingIcon = {
-                if (state.searchQuery.isNotBlank()) {
-                    IconButton(onClick = { state.searchQuery = "" }) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "Clear search",
-                            tint = TextMuted,
-                        )
-                    }
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val chips = workspaceFilterChips(state)
+            if (chips.isEmpty()) {
+                PaletteSearchHint()
+            } else {
+                chips.forEach { chip ->
+                    WorkspaceFilterChipView(
+                        chip = chip,
+                        state = state,
+                    )
                 }
-            },
-            placeholder = {
-                Text(
-                    text = "Search pull requests, repositories, or numbers…",
-                    color = TextMuted,
-                )
-            },
-            singleLine = true,
-            modifier = Modifier
-                .weight(1f)
-                .onFocusChanged { focusState ->
-                    state.keyboardMode = if (focusState.isFocused) {
-                        KeyboardMode.Insert
-                    } else {
-                        KeyboardMode.Normal
-                    }
-                },
-            colors = revqTextFieldColors(),
-        )
+            }
+        }
 
-        WorkspaceMenuControl(
-            label = "Sort",
-            value = state.sortMode,
-            width = 158.dp,
-            options = listOf(
-                "Urgency",
-                "Updated newest",
-                "Updated oldest",
-                "Repository",
-                "Comments",
-            ),
-            onSelect = {
-                state.sortMode = it
-                state.saveConfig()
-            },
-        )
+        if (state.compactRows) {
+            WorkspaceFilterChipView(
+                chip = WorkspaceFilterChip("Rows", "Compact", clearable = false),
+                state = state,
+            )
+        }
+    }
+}
 
-        WorkspaceMenuControl(
-            label = "Group",
-            value = when {
-                state.view == View.Today -> "Sections"
-                state.groupByRepository -> "Repository"
-                else -> "None"
-            },
-            width = 138.dp,
-            options = listOf("None", "Repository"),
-            enabled = state.view != View.Today,
-            onSelect = {
-                state.groupByRepository = it == "Repository"
-                state.saveConfig()
-            },
+@Composable
+private fun PaletteSearchHint() {
+    Row(
+        modifier = Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Border, RoundedCornerShape(999.dp))
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Search,
+            contentDescription = null,
+            tint = TextMuted,
+            modifier = Modifier.size(16.dp),
         )
-
-        WorkspaceMenuControl(
-            label = "Rows",
-            value = if (state.compactRows) "Compact" else "Comfortable",
-            width = 145.dp,
-            options = listOf("Comfortable", "Compact"),
-            onSelect = {
-                state.compactRows = it == "Compact"
-                state.saveConfig()
-            },
+        Text(
+            text = "Space to search or filter",
+            color = TextMuted,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
-private fun WorkspaceMenuControl(
-    label: String,
-    value: String,
-    width: Dp,
-    options: List<String>,
-    enabled: Boolean = true,
-    onSelect: (String) -> Unit,
+private fun WorkspaceFilterChipView(
+    chip: WorkspaceFilterChip,
+    state: AppState,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Box {
-        Surface(
-            modifier = Modifier
-                .width(width)
-                .height(52.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .clickable(enabled = enabled) {
-                    expanded = true
-                },
-            color = Color(0xFF171A1E),
-            border = BorderStroke(1.dp, Border),
-            shape = RoundedCornerShape(10.dp),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = label.uppercase(),
-                        color = TextMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = value,
-                        color = if (enabled) TextPrimary else TextMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = TextMuted,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier
-                .width(width)
-                .background(PanelBg),
-        ) {
-            Text(
-                text = label.uppercase(),
-                color = TextMuted,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+    Row(
+        modifier = Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Border, RoundedCornerShape(999.dp))
+            .padding(start = 10.dp, end = if (chip.clearable) 3.dp else 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = chip.label,
+            color = Olive,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = chip.value,
+            color = TextPrimary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (chip.clearable) {
+            DiscoverableMiniIconAction(
+                label = "Clear filter",
+                icon = Icons.Rounded.Close,
+                state = state,
+                onClick = { state.clearFilter() },
             )
-
-            options.forEach { option ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            expanded = false
-                            onSelect(option)
-                        }
-                        .background(
-                            if (option == value) OliveSoft else Color.Transparent,
-                        )
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (option == value) Olive else Color.Transparent,
-                            ),
-                    )
-                    Spacer(Modifier.width(9.dp))
-                    Text(
-                        text = option,
-                        color = if (option == value) Olive else TextPrimary,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
         }
     }
 }
@@ -2618,7 +2687,6 @@ fun PullRequestRow(
     val selected = state.selectedPullRequest?.key == pr.key &&
             state.selectedPullRequest?.source == pr.source
 
-    val kind = attentionKind(pr)
     val presentation = rowPresentation(state, pr, startHere)
     val rowPadding = if (state.compactRows) 10.dp else 14.dp
     val avatarSize = if (state.compactRows) 34.dp else 40.dp
@@ -2643,13 +2711,7 @@ fun PullRequestRow(
                 .width(3.dp)
                 .height(railHeight)
                 .clip(RoundedCornerShape(999.dp))
-                .background(
-                    when {
-                        selected -> colorForKind(kind)
-                        startHere -> Olive
-                        else -> Color.Transparent
-                    },
-                ),
+                .background(presentation.color.copy(alpha = if (selected || startHere || presentation.strong) 1f else 0.48f)),
         )
 
         Spacer(Modifier.width(11.dp))
@@ -2705,9 +2767,12 @@ fun PullRequestRow(
                 Spacer(Modifier.width(10.dp))
 
                 Text(
-                    text = staleOrRelativeLabel(pr.updatedAt),
+                    text = rowUpdatedPrefix(pr),
                     color = if (isStale(pr.updatedAt)) Amber else TextMuted,
                     style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.width(104.dp),
                 )
             }
 
@@ -2723,13 +2788,6 @@ fun PullRequestRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(presentation.color),
-                )
-
                 Text(
                     text = presentation.text,
                     color = if (presentation.strong) {
@@ -2740,7 +2798,10 @@ fun PullRequestRow(
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+
+                PullRequestReasonChip(pullRequestReasonLabel(state, pr, startHere))
             }
         }
     }
@@ -2829,7 +2890,7 @@ private fun rowPresentation(
 
 private fun rowMetadata(pr: PullRequest): String {
     return buildList {
-        add("${pr.repository} #${pr.number}")
+        add(rowIdentityMetadata(pr))
 
         pr.authorLogin
             ?.takeIf { it.isNotBlank() }
@@ -2846,6 +2907,54 @@ private fun rowMetadata(pr: PullRequest): String {
         }
     }.joinToString(" · ")
 }
+
+fun rowIdentityMetadata(pr: PullRequest): String = "${pr.repository} #${pr.number}"
+
+fun rowUpdatedPrefix(pr: PullRequest): String = "Updated ${staleOrRelativeLabel(pr.updatedAt)}"
+
+data class WorkspaceFilterChip(
+    val label: String,
+    val value: String,
+    val clearable: Boolean,
+)
+
+fun workspaceFilterChips(state: AppState): List<WorkspaceFilterChip> = buildList {
+    state.searchQuery
+        .takeIf { it.isNotBlank() }
+        ?.let { add(WorkspaceFilterChip("Filter", it, clearable = true)) }
+
+    if (state.focusReviewMode) {
+        add(WorkspaceFilterChip("Focus", "Needs Review", clearable = false))
+    }
+}
+
+data class SelectedPullRequestActionHint(
+    val key: String,
+    val label: String,
+)
+
+fun selectedPullRequestActionHints(state: AppState): List<SelectedPullRequestActionHint> {
+    val selected = state.selectedPullRequest ?: return emptyList()
+    return buildList {
+        add(SelectedPullRequestActionHint("o", "Open"))
+        add(SelectedPullRequestActionHint("p", if (state.isPinned(selected)) "Unpin" else "Pin"))
+        if (selected.source == PullRequestSource.ReviewRequest && !state.isHandledCurrent(selected)) {
+            add(SelectedPullRequestActionHint("m", "Reviewed"))
+        }
+        add(SelectedPullRequestActionHint("c", "Copy"))
+    }
+}
+
+data class SetupChecklistItem(
+    val label: String,
+    val complete: Boolean,
+)
+
+fun setupChecklistItems(state: AppState): List<SetupChecklistItem> = listOf(
+    SetupChecklistItem("GitHub CLI", state.ghPathText.isNotBlank() || state.ghDetectionSource != "Not detected"),
+    SetupChecklistItem("Tracked repos or orgs", parseLines(state.repositoriesText).isNotEmpty() || parseLines(state.organizationsText).isNotEmpty()),
+    SetupChecklistItem("Refresh", state.lastRefreshFinishedAt != null || state.pullRequests.isNotEmpty()),
+)
 
 private fun mainToolbarSubtitle(state: AppState): String {
     return when (state.view) {
@@ -2960,6 +3069,10 @@ fun BottomStatusBar(
         }
 
         Spacer(Modifier.width(12.dp))
+        SelectedPullRequestActionStrip(state)
+        Spacer(Modifier.width(10.dp))
+        ActiveFocusChip(activeKeyboardRegionLabel(state, paletteState.isOpen))
+        Spacer(Modifier.width(10.dp))
         NextKeyboardActionHint(state)
         Spacer(Modifier.width(10.dp))
         KeyboardContextHints(state, paletteState)
@@ -2975,6 +3088,68 @@ fun BottomStatusBar(
             Spacer(Modifier.width(6.dp))
             Text("Space More", color = TextMuted)
         }
+    }
+}
+
+@Composable
+private fun SelectedPullRequestActionStrip(state: AppState) {
+    val hints = selectedPullRequestActionHints(state)
+    if (hints.isEmpty()) return
+
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Border, RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        hints.forEach { hint ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = hint.key,
+                    color = Olive,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = hint.label,
+                    color = TextMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveFocusChip(label: String) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Olive.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 9.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = "Focus",
+            color = Olive,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = label,
+            color = TextPrimary,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -3029,7 +3204,7 @@ private fun KeyboardContextHints(
             fontWeight = FontWeight.Bold,
         )
 
-        keyboardHints(state, paletteOpen = paletteState.isOpen).forEach { hint ->
+        compactKeyboardHints(state, paletteOpen = paletteState.isOpen).forEach { hint ->
             ShortcutHint(hint.key, hint.label)
         }
     }
@@ -3093,6 +3268,43 @@ fun SkeletonBox(width: Dp, height: Dp, shape: RoundedCornerShape) {
     )
 }
 
+fun pullRequestReasonLabel(
+    state: AppState,
+    pr: PullRequest,
+    startHere: Boolean = false,
+): String {
+    if (state.view == View.Pinned && state.isPinned(pr)) return "Pinned"
+
+    return when {
+        pr.source == PullRequestSource.Mine -> ownPullRequestStatusTitle(ownPullRequestPrimaryStatus(pr))
+        state.view == View.Handled -> {
+            val changed = whatChanged(state, pr)
+            if (changed.startsWith("Updated")) "Changed" else "Reviewed"
+        }
+        state.view == View.Today -> "Today"
+        state.view == View.Blocked -> "Blocked"
+        state.view == View.Ready -> "Ready"
+        startHere -> "Up next"
+        else -> "Requested"
+    }
+}
+
+@Composable
+private fun PullRequestReasonChip(label: String) {
+    Text(
+        text = label,
+        color = TextMuted,
+        style = MaterialTheme.typography.labelSmall,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, Border, RoundedCornerShape(999.dp))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+    )
+}
+
 @Composable
 fun SessionCompleteState(state: AppState) {
     Box(
@@ -3153,7 +3365,7 @@ fun SessionCompleteState(state: AppState) {
 
 @Composable
 fun EmptyState(state: AppState) {
-    val spec = emptyStateSpec(state.view)
+    val spec = emptyStateSpec(state)
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -3312,6 +3524,26 @@ internal fun emptyStateSpec(view: View): EmptyStateSpec {
             primaryAction = { it.refresh() },
         )
     }
+}
+
+internal fun emptyStateSpec(state: AppState): EmptyStateSpec {
+    if (state.searchQuery.isNotBlank()) {
+        return EmptyStateSpec(
+            eyebrow = "FILTERED OUT",
+            title = "No matches in this view.",
+            subtitle = "The active palette filter is hiding everything in ${state.view.label}. Clear it to return to the full list.",
+            accent = Amber,
+            icon = Icons.Rounded.Search,
+            heroLabel = "Filtered list",
+            detailLabel = state.searchQuery,
+            primaryLabel = "Clear filter",
+            primaryAction = { it.clearFilter() },
+            secondaryLabel = "Refresh",
+            secondaryAction = { it.refresh() },
+        )
+    }
+
+    return emptyStateSpec(state.view)
 }
 
 @Composable
@@ -3769,25 +4001,67 @@ fun moveSelection(state: AppState, delta: Int) {
 
 fun installBestEffortTray(state: AppState) {
     runCatching {
-        if (!SystemTray.isSupported()) return
+        if (!SystemTray.isSupported()) {
+            state.trayAvailable = false
+            return
+        }
         val tray = SystemTray.getSystemTray()
-        if (tray.trayIcons.any { it.toolTip == "RevQ" }) return
-        val image = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
-        val g = image.createGraphics()
-        g.color = java.awt.Color(167, 196, 106)
-        g.fillOval(2, 2, 12, 12)
-        g.dispose()
+        if (tray.trayIcons.any { it.toolTip == "RevQ" }) {
+            state.trayAvailable = true
+            return
+        }
+        val image = loadRevqTrayImage()
         val popup = PopupMenu()
-        popup.add(MenuItem("Show RevQ").apply { addActionListener { state.selectView(View.NeedsReview) } })
-        popup.add(MenuItem("Refresh").apply { addActionListener { state.refresh() } })
-        popup.add(MenuItem("Start reviewing").apply { addActionListener { state.startReviewing() } })
+        popup.add(MenuItem("Show RevQ").apply {
+            addActionListener {
+                EventQueue.invokeLater {
+                    state.mainWindowVisible = true
+                    state.selectView(View.NeedsReview)
+                }
+            }
+        })
+        popup.add(MenuItem("Refresh").apply {
+            addActionListener {
+                EventQueue.invokeLater {
+                    state.mainWindowVisible = true
+                    state.refresh()
+                }
+            }
+        })
+        popup.add(MenuItem("Start reviewing").apply {
+            addActionListener {
+                EventQueue.invokeLater {
+                    state.mainWindowVisible = true
+                    state.startReviewing()
+                }
+            }
+        })
         popup.addSeparator()
         popup.add(MenuItem("Quit").apply { addActionListener { exitProcess(0) } })
         tray.add(TrayIcon(image, "RevQ", popup).apply { isImageAutoSize = true })
+        state.trayAvailable = true
         state.statusLine = "RevQ tray installed"
     }.onFailure {
+        state.trayAvailable = false
         state.statusLine = "Tray unavailable on this desktop session"
     }
+}
+
+private fun loadRevqTrayImage(): java.awt.Image {
+    val resource = Thread.currentThread().contextClassLoader.getResource("icon.png")
+    val image = when {
+        resource != null -> ImageIO.read(resource)
+        File("icon.png").exists() -> ImageIO.read(File("icon.png"))
+        else -> null
+    }
+    if (image != null) return image
+
+    val fallback = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
+    val g = fallback.createGraphics()
+    g.color = java.awt.Color(167, 196, 106)
+    g.fillOval(2, 2, 12, 12)
+    g.dispose()
+    return fallback
 }
 
 
@@ -4222,6 +4496,26 @@ fun sessionProgressLine(state: AppState): String {
         else -> {
             "${state.sessionHandledCount} reviewed · ${state.reviewQueue().size} still waiting"
         }
+    }
+}
+
+fun reviewSessionProgressPillLabel(state: AppState): String? {
+    if (!state.reviewSessionActive) return null
+
+    val keys = state.reviewSessionQueueKeys
+    if (keys.isEmpty()) {
+        val waiting = state.reviewQueue().size
+        return if (waiting == 0) "Complete" else "$waiting queued"
+    }
+
+    val selectedKey = state.selectedPullRequest?.key
+    val index = selectedKey?.let(keys::indexOf) ?: -1
+
+    return when {
+        index >= 0 -> "${index + 1}/${keys.size}"
+        state.reviewQueue().isEmpty() -> "Complete"
+        state.sessionHandledCount > 0 -> "${state.sessionHandledCount} done"
+        else -> "${state.reviewQueue().size} queued"
     }
 }
 

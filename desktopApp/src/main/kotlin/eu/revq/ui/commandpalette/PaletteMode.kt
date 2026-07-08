@@ -11,7 +11,7 @@ val PaletteMode.title: String
     get() = "Command palette"
 
 val PaletteMode.placeholder: String
-    get() = "Search commands, pull requests, views, repositories, shortcuts…"
+    get() = "Search commands, pull requests, views, repositories, shortcuts..."
 
 val PaletteMode.entryLabel: String
     get() = "Space"
