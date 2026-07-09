@@ -14,30 +14,28 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.KeyboardCommandKey
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,7 +44,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.Typography
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Surface
@@ -55,6 +52,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,7 +68,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -78,8 +80,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
@@ -99,6 +103,8 @@ import java.awt.Toolkit
 import java.awt.TrayIcon
 import java.awt.datatransfer.StringSelection
 import java.awt.image.BufferedImage
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -122,17 +128,15 @@ import kotlin.io.path.writeLines
 import kotlin.math.max
 import kotlin.system.exitProcess
 import eu.revq.commands.CommandId
-import eu.revq.commands.CommandExecutor
+import eu.revq.commands.CommandRegistry
 import eu.revq.keyboard.FocusRegion
 import eu.revq.keyboard.KeyboardAction
 import eu.revq.keyboard.KeyboardContext
 import eu.revq.keyboard.KeyboardMode
 import eu.revq.keyboard.KeyboardRouter
-import eu.revq.keyboard.activeKeyboardRegionLabel
-import eu.revq.keyboard.compactKeyboardHints
-import eu.revq.keyboard.nextKeyboardAction
 import eu.revq.ui.commandpalette.CommandPalette
 import eu.revq.ui.commandpalette.CommandPaletteState
+import eu.revq.ui.commandpalette.PaletteMode
 
 private val AppBg = Color(0xFF101215)
 internal val SidebarBg = Color(0xFF15181C)
@@ -183,11 +187,101 @@ fun RevqTheme(
     uiScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
-    // Compose Desktop already receives the operating-system display scale through
-    // LocalDensity. RevQ must not apply a second manual multiplier, otherwise 4K
-    // displays become inconsistent and the sidebar can overflow. The parameter is
-    // kept for old saved configs, but the effective scale is always OS-driven.
-    MaterialTheme(colorScheme = RevqColorScheme, typography = RevqTypography, content = content)
+    val nativeDensity = LocalDensity.current
+    val detectedEnvironmentScale = remember {
+        desktopEnvironmentScale() ?: currentCosmicDisplayScale()
+    }
+    val effectiveDensity = effectiveDesktopDensity(
+        composeDensity = nativeDensity.density,
+        graphicsScale = currentGraphicsScale(),
+        toolkitDpi = runCatching { Toolkit.getDefaultToolkit().screenResolution }.getOrNull(),
+        environmentScale = detectedEnvironmentScale,
+    )
+    CompositionLocalProvider(
+        LocalDensity provides Density(effectiveDensity, nativeDensity.fontScale),
+    ) {
+        MaterialTheme(colorScheme = RevqColorScheme, typography = RevqTypography, content = content)
+    }
+}
+
+fun effectiveDesktopDensity(
+    composeDensity: Float,
+    graphicsScale: Float? = null,
+    toolkitDpi: Int? = null,
+    environmentScale: Float? = null,
+): Float {
+    if (composeDensity > 1.05f) return composeDensity
+    return listOfNotNull(
+        composeDensity,
+        graphicsScale,
+        toolkitDpi?.div(96f),
+        environmentScale,
+    ).maxOrNull()?.coerceIn(1f, 4f) ?: composeDensity
+}
+
+private fun currentGraphicsScale(): Float? = runCatching {
+    java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+        .defaultScreenDevice
+        .defaultConfiguration
+        .defaultTransform
+        .scaleX
+        .toFloat()
+}.getOrNull()
+
+private fun desktopEnvironmentScale(): Float? = sequenceOf(
+    "GDK_SCALE",
+    "QT_SCALE_FACTOR",
+)
+    .mapNotNull { System.getenv(it)?.toFloatOrNull() }
+    .firstOrNull { it > 1f }
+
+fun parseCosmicDisplayScale(output: String): Float? {
+    val plainText = output.replace(Regex("\u001B\\[[;\\d]*m"), "")
+    return Regex("""Scale:\s*([0-9]+(?:\.[0-9]+)?)%""")
+        .findAll(plainText)
+        .mapNotNull { match -> match.groupValues[1].toFloatOrNull()?.div(100f) }
+        .filter { it >= 1f }
+        .maxOrNull()
+}
+
+private fun currentCosmicDisplayScale(): Float? {
+    val desktop = System.getenv("XDG_CURRENT_DESKTOP").orEmpty()
+    val session = System.getenv("XDG_SESSION_TYPE").orEmpty()
+    if (!desktop.contains("COSMIC", ignoreCase = true) || !session.equals("wayland", ignoreCase = true)) {
+        return null
+    }
+
+    return runCatching {
+        val process = ProcessBuilder("cosmic-randr", "list")
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        val finished = process.waitFor(2, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            null
+        } else {
+            parseCosmicDisplayScale(output)
+        }
+    }.getOrNull()
+}
+
+fun recommendedJavaUiScale(
+    desktop: String?,
+    sessionType: String?,
+    cosmicScale: Float?,
+): String? = PlatformPresence.recommendedJavaUiScale(desktop, sessionType, cosmicScale)
+
+private fun configureJavaDesktopUiScale() {
+    if (!System.getProperty("sun.java2d.uiScale").isNullOrBlank()) return
+
+    val scale = recommendedJavaUiScale(
+        desktop = System.getenv("XDG_CURRENT_DESKTOP"),
+        sessionType = System.getenv("XDG_SESSION_TYPE"),
+        cosmicScale = currentCosmicDisplayScale(),
+    ) ?: return
+
+    System.setProperty("sun.java2d.uiScale", scale)
 }
 
 @Composable
@@ -205,57 +299,69 @@ fun revqTextFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedContainerColor = Color(0xFF15181C),
 )
 
-fun main() = application {
-    val appState = remember { AppState() }
-    val mainWindowState = remember { WindowState(size = DpSize(1680.dp, 1040.dp), position = WindowPosition.Aligned(Alignment.Center)) }
+fun main() {
+    configureJavaDesktopUiScale()
 
-    LaunchedEffect(Unit) {
-        appState.loadFromDisk()
-        installBestEffortTray(appState)
-        appState.startReminderScheduler()
-        appState.startAutoRefreshScheduler()
-        if (appState.repositoriesText.isNotBlank()) {
-            appState.refresh()
-        } else {
-            appState.statusLine = "Complete setup to start your review queue"
-            appState.view = View.Settings
-        }
-    }
+    application {
+        val appState = remember { AppState() }
+        val mainWindowState = remember { WindowState(size = DpSize(1680.dp, 1040.dp), position = WindowPosition.Aligned(Alignment.Center)) }
 
-    Window(
-        onCloseRequest = {
-            if (appState.trayAvailable) {
-                appState.mainWindowVisible = false
-                appState.statusLine = "RevQ is still running in the tray"
+        LaunchedEffect(Unit) {
+            appState.loadFromDisk()
+            installBestEffortTray(appState)
+            appState.startReminderScheduler()
+            appState.startAutoRefreshScheduler()
+            if (appState.repositoriesText.isNotBlank()) {
+                appState.refresh()
             } else {
-                exitApplication()
+                appState.statusLine = "No repositories configured · open Settings to add one"
             }
-        },
-        visible = appState.mainWindowVisible,
-        state = mainWindowState,
-        title = "RevQ",
-        icon = painterResource("icon.png"),
-    ) {
-        RevqTheme(uiScale = appState.uiScale) {
-            RevqApp(appState)
         }
-    }
 
-    if (appState.showReminderWindow) {
         Window(
-            onCloseRequest = { appState.closeReminderWindow() },
-            title = "RevQ Review Reminder",
-            icon = painterResource("icon.png"),
-            undecorated = true,
-            alwaysOnTop = true,
-            resizable = false,
-            state = WindowState(
-                size = DpSize(840.dp, 700.dp),
-                position = WindowPosition.Aligned(Alignment.Center),
-            ),
+            onCloseRequest = {
+                if (appState.trayAvailable) {
+                    appState.mainWindowVisible = false
+                    appState.statusLine = "RevQ is still running in the tray"
+                } else {
+                    exitApplication()
+                }
+            },
+            visible = appState.mainWindowVisible,
+            state = mainWindowState,
+            title = "RevQ",
+            icon = painterResource("icon-app.png"),
         ) {
+            DisposableEffect(window) {
+                val listener = object : WindowAdapter() {
+                    override fun windowActivated(event: WindowEvent?) {
+                        appState.mainWindowFocusRequest += 1
+                    }
+                }
+                window.addWindowListener(listener)
+                onDispose { window.removeWindowListener(listener) }
+            }
             RevqTheme(uiScale = appState.uiScale) {
-                ReminderWindow(appState)
+                RevqApp(appState)
+            }
+        }
+
+        if (appState.showReminderWindow) {
+            Window(
+                onCloseRequest = { appState.closeReminderWindow() },
+                title = "RevQ Review Reminder",
+                icon = painterResource("icon-app.png"),
+                undecorated = true,
+                alwaysOnTop = true,
+                resizable = false,
+                state = WindowState(
+                    size = DpSize(840.dp, 700.dp),
+                    position = WindowPosition.Aligned(Alignment.Center),
+                ),
+            ) {
+                RevqTheme(uiScale = appState.uiScale) {
+                    ReminderWindow(appState)
+                }
             }
         }
     }
@@ -306,6 +412,7 @@ data class PullRequest(
     val updatedAt: String?,
     val comments: Int = 0,
     val source: PullRequestSource,
+    val reviewRequestKind: ReviewRequestKind? = null,
     val authorLogin: String? = null,
     val isDraft: Boolean = false,
     val reviewDecision: String? = null,
@@ -333,36 +440,47 @@ data class DiscussionInsight(
 
 data class WorkerResult<T>(val value: T? = null, val error: String? = null)
 data class HandledUndo(val pullRequest: PullRequest, val marker: String)
+data class ActionFeedback(
+    val message: String,
+    val sequence: Long,
+)
 
-class AppState {
+data class QueueViewportState(
+    val firstVisibleItemIndex: Int,
+    val firstVisibleItemScrollOffset: Int,
+)
+
+data class RefreshDelta(
+    val newCount: Int,
+    val updatedCount: Int,
+    val removedCount: Int,
+) {
+    val totalChanges: Int get() = newCount + updatedCount + removedCount
+
+    fun summaryText(): String = buildList {
+        if (newCount > 0) add("$newCount new")
+        if (updatedCount > 0) add("$updatedCount updated")
+        if (removedCount > 0) add("$removedCount removed")
+    }.joinToString(" · ")
+}
+
+class AppState(
+    private val pullRequestIntake: PullRequestIntake = PullRequestIntake(GhClient),
+    private val settingsStore: SettingsStore = FileSettingsStore(),
+) {
     private val scope = MainScope()
-    private val configDir: Path = Paths.get(System.getProperty("user.home"), ".config", "revq-compose")
-    private val reposFile: Path = configDir.resolve("repositories.txt")
-    private val orgsFile: Path = configDir.resolve("organizations.txt")
-    private val ghPathFile: Path = configDir.resolve("gh-path.txt")
-    private val ghDetectionSourceFile: Path = configDir.resolve("gh-detection-source.txt")
+    private val configDir: Path = defaultRevqConfigDirectory()
     private val handledFile: Path = configDir.resolve("handled-reviews.txt")
     private val uiScaleFile: Path = configDir.resolve("ui-scale.txt")
     private val cacheFile: Path = configDir.resolve("pull-requests-cache.tsv")
     private val pinnedFile: Path = configDir.resolve("pinned-prs.txt")
-    private val mutedRepositoriesFile: Path = configDir.resolve("muted-repositories.txt")
-    private val autoRefreshEnabledFile: Path = configDir.resolve("auto-refresh-enabled.txt")
-    private val autoRefreshIntervalFile: Path = configDir.resolve("auto-refresh-interval-minutes.txt")
-    private val sortModeFile: Path = configDir.resolve("sort-mode.txt")
-    private val groupByRepositoryFile: Path = configDir.resolve("group-by-repository.txt")
-    private val staleThresholdDaysFile: Path = configDir.resolve("stale-threshold-days.txt")
-    private val compactRowsFile: Path = configDir.resolve("compact-rows.txt")
-    private val focusReviewModeFile: Path = configDir.resolve("focus-review-mode.txt")
-    private val reminderEnabledFile: Path = configDir.resolve("reminder-enabled.txt")
-    private val reminderTimeFile: Path = configDir.resolve("reminder-time.txt")
-    private val reminderDaysFile: Path = configDir.resolve("reminder-days.txt")
-    private val reminderQuietHoursFile: Path = configDir.resolve("reminder-quiet-hours.txt")
-    private val reminderOnlyWhenQueueFile: Path = configDir.resolve("reminder-only-when-queue.txt")
-    private val reminderSnoozeMinutesFile: Path = configDir.resolve("reminder-snooze-minutes.txt")
     private val reminderSnoozedUntilFile: Path = configDir.resolve("reminder-snoozed-until.txt")
     private val reminderDismissedDateFile: Path = configDir.resolve("reminder-dismissed-date.txt")
     private var reminderSchedulerJob: Job? = null
     private var autoRefreshJob: Job? = null
+    private var refreshSummaryJob: Job? = null
+    private var scheduledReminderPending = false
+    private var sidebarNavigationHintShownThisSession = false
 
     var view by mutableStateOf(View.NeedsReview)
     var searchQuery by mutableStateOf("")
@@ -371,15 +489,23 @@ class AppState {
     var ghPathText by mutableStateOf("")
     var pullRequests by mutableStateOf(emptyList<PullRequest>())
     var selectedPullRequest by mutableStateOf<PullRequest?>(null)
+    var expandedPullRequestKey by mutableStateOf<String?>(null)
     var handledReviewRecords by mutableStateOf(emptyMap<String, String>())
     var isRefreshing by mutableStateOf(false)
     var isDiscovering by mutableStateOf(false)
+    var repositoryDiscovery by mutableStateOf<RepositoryDiscoveryResult?>(null)
+    var repositoryScopeSelection by mutableStateOf(RepositoryScopeSelection())
+    var repositoryDiscoveryQuery by mutableStateOf("")
+    var repositoryDiscoveryError by mutableStateOf<String?>(null)
+
+    // Tracking discovery is intentionally separate from active tracking.
+    // Discovery only populates choices; repositoriesText changes only after explicit apply.
+    var discoveredTrackingRepositories by mutableStateOf<List<String>>(emptyList())
+    var pendingTrackedRepositories by mutableStateOf<Set<String>>(emptySet())
     var lastRefreshStartedAt by mutableStateOf<Instant?>(null)
     var lastRefreshFinishedAt by mutableStateOf<Instant?>(null)
     var lastRefreshError by mutableStateOf<String?>(null)
     var statusLine by mutableStateOf("Ready")
-    var reviewSessionActive by mutableStateOf(false)
-    var focusReviewMode by mutableStateOf(false)
     var showReminderWindow by mutableStateOf(false)
     var isTestingGh by mutableStateOf(false)
     var ghTestResult by mutableStateOf<String?>(null)
@@ -390,6 +516,7 @@ class AppState {
     var lastUndoReview by mutableStateOf<HandledUndo?>(null)
     var mainWindowVisible by mutableStateOf(true)
     var trayAvailable by mutableStateOf(false)
+    var mainWindowFocusRequest by mutableStateOf(0)
     var reminderEnabled by mutableStateOf(true)
     var reminderTimeText by mutableStateOf("09:00")
     var reminderDaysText by mutableStateOf("Mon-Fri")
@@ -412,8 +539,17 @@ class AppState {
     var staleThresholdDaysText by mutableStateOf("2")
     var compactRows by mutableStateOf(false)
     var diagnosticsText by mutableStateOf("")
-    var sessionHandledCount by mutableStateOf(0)
-    var reviewSessionQueueKeys by mutableStateOf<List<String>>(emptyList())
+    var displayDiagnostics by mutableStateOf("Display metrics not captured yet")
+    var actionFeedback by mutableStateOf<ActionFeedback?>(null)
+    private var actionFeedbackSequence = 0L
+    var newPullRequestKeys by mutableStateOf(emptySet<String>())
+    var updatedPullRequestKeys by mutableStateOf(emptySet<String>())
+    var refreshDelta by mutableStateOf<RefreshDelta?>(null)
+    var needsReviewHasUnseenChanges by mutableStateOf(false)
+    var showAboutDialog by mutableStateOf(false)
+    var sidebarNavigationHintVisible by mutableStateOf(false)
+    var isMergingPullRequest by mutableStateOf(false)
+    var mergingPullRequestKey by mutableStateOf<String?>(null)
     var recentCommandIds by mutableStateOf<List<CommandId>>(emptyList())
     var recentPaletteTargets by mutableStateOf<List<String>>(emptyList())
         private set
@@ -425,12 +561,17 @@ class AppState {
     var keyboardPageStep by mutableStateOf(6)
     var settingsSectionIndex by mutableStateOf(0)
     var settingsFocusedRowIndex by mutableStateOf(0)
+    private var queueSelectionKeys by mutableStateOf<Map<View, String>>(emptyMap())
+    private var queueViewportStates by mutableStateOf<Map<View, QueueViewportState>>(emptyMap())
+    var queueScopeFilters by mutableStateOf<Map<View, QueueScopeFilter>>(emptyMap())
 
     fun loadFromDisk() {
         Files.createDirectories(configDir)
-        repositoriesText = reposFile.safeLines().joinToString("\n")
-        organizationsText = orgsFile.safeLines().joinToString("\n")
-        ghPathText = ghPathFile.safeLines().firstOrNull().orEmpty()
+        val settings = settingsStore.load()
+        repositoriesText = settings.repositories.joinToString("\n")
+        organizationsText = settings.organizations.joinToString("\n")
+        ghPathText = settings.githubExecutable
+        ghDetectionSource = settings.githubDetectionSource
         GhClient.configureExecutable(ghPathText)
         if (ghPathText.isBlank()) {
             GhClient.detectExecutableResult()?.let { detected ->
@@ -441,18 +582,17 @@ class AppState {
                 ghDetectionSource = "Not detected"
             }
         } else {
-            ghDetectionSource = ghDetectionSourceFile.safeLines().firstOrNull()?.ifBlank { null }
-                ?: GhDetectionSource.Configured.label
+            ghDetectionSource = settings.githubDetectionSource.ifBlank { GhDetectionSource.Configured.label }
         }
         uiScale = 1.0f
         densityMode = "OS automatic"
         Files.deleteIfExists(uiScaleFile)
-        reminderEnabled = reminderEnabledFile.safeLines().firstOrNull()?.toBooleanStrictOrNull() ?: true
-        reminderTimeText = reminderTimeFile.safeLines().firstOrNull()?.ifBlank { null } ?: "09:00"
-        reminderDaysText = reminderDaysFile.safeLines().firstOrNull()?.ifBlank { null } ?: "Mon-Fri"
-        quietHoursText = reminderQuietHoursFile.safeLines().firstOrNull()?.ifBlank { null } ?: "18:00-08:00"
-        remindOnlyWhenQueueNotClear = reminderOnlyWhenQueueFile.safeLines().firstOrNull()?.toBooleanStrictOrNull() ?: true
-        reminderSnoozeMinutesText = reminderSnoozeMinutesFile.safeLines().firstOrNull()?.ifBlank { null } ?: "60"
+        reminderEnabled = settings.reminderEnabled
+        reminderTimeText = settings.reminderTime
+        reminderDaysText = settings.reminderDays
+        quietHoursText = settings.quietHours
+        remindOnlyWhenQueueNotClear = settings.remindOnlyWhenQueueNotClear
+        reminderSnoozeMinutesText = settings.reminderSnoozeMinutes
         reminderSnoozedUntil = reminderSnoozedUntilFile.safeLines().firstOrNull()?.let { runCatching { Instant.parse(it) }.getOrNull() }
         reminderDismissedDate = reminderDismissedDateFile.safeLines().firstOrNull()?.ifBlank { null }
         handledReviewRecords = handledFile.safeLines()
@@ -463,36 +603,19 @@ class AppState {
             .toMap()
         pullRequests = dedupePullRequests(loadCache())
         pinnedPrKeys = pinnedFile.safeLines().toSet()
-        mutedRepositoriesText = mutedRepositoriesFile.safeLines().joinToString("\n")
-        autoRefreshEnabled = autoRefreshEnabledFile.safeLines().firstOrNull()?.toBooleanStrictOrNull() ?: true
-        autoRefreshIntervalMinutesText = autoRefreshIntervalFile.safeLines().firstOrNull()?.ifBlank { null } ?: "5"
-        sortMode = sortModeFile.safeLines().firstOrNull()?.ifBlank { null } ?: "Urgency"
-        groupByRepository = groupByRepositoryFile.safeLines().firstOrNull()?.toBooleanStrictOrNull() ?: false
-        staleThresholdDaysText = staleThresholdDaysFile.safeLines().firstOrNull()?.ifBlank { null } ?: "2"
-        compactRows = compactRowsFile.safeLines().firstOrNull()?.toBooleanStrictOrNull() ?: false
-        focusReviewMode = focusReviewModeFile.safeLines().firstOrNull()?.toBooleanStrictOrNull() ?: false
+        mutedRepositoriesText = settings.mutedRepositories.joinToString("\n")
+        autoRefreshEnabled = settings.autoRefreshEnabled
+        autoRefreshIntervalMinutesText = settings.autoRefreshIntervalMinutes
+        sortMode = settings.sortMode
+        groupByRepository = settings.groupByRepository
+        staleThresholdDaysText = settings.staleThresholdDays
+        compactRows = settings.compactRows
+        replacePullRequests(pullRequests)
     }
 
     fun saveConfig() {
-        Files.createDirectories(configDir)
-        reposFile.writeLines(parseLines(repositoriesText))
-        orgsFile.writeLines(parseLines(organizationsText))
         val ghPath = ghPathText.trim()
-        if (ghPath.isBlank()) {
-            Files.deleteIfExists(ghPathFile)
-        } else {
-            ghPathFile.writeLines(listOf(ghPath))
-        }
-        ghDetectionSourceFile.writeLines(listOf(ghDetectionSource))
         Files.deleteIfExists(uiScaleFile)
-        mutedRepositoriesFile.writeLines(parseLines(mutedRepositoriesText))
-        autoRefreshEnabledFile.writeLines(listOf(autoRefreshEnabled.toString()))
-        autoRefreshIntervalFile.writeLines(listOf(autoRefreshIntervalMinutesText.trim().ifBlank { "5" }))
-        sortModeFile.writeLines(listOf(sortMode.ifBlank { "Urgency" }))
-        groupByRepositoryFile.writeLines(listOf(groupByRepository.toString()))
-        staleThresholdDaysFile.writeLines(listOf(staleThresholdDaysText.trim().ifBlank { "2" }))
-        compactRowsFile.writeLines(listOf(compactRows.toString()))
-        focusReviewModeFile.writeLines(listOf(focusReviewMode.toString()))
         saveReminderState()
         GhClient.configureExecutable(ghPath)
         startReminderScheduler()
@@ -524,9 +647,12 @@ class AppState {
     }
 
     fun removeRepository(repository: String) {
-        repositoriesText = parseLines(repositoriesText).filterNot { it == repository }.joinToString("\n")
+        repositoriesText = parseLines(repositoriesText)
+            .filterNot { it == repository }
+            .joinToString("\n")
+        pendingTrackedRepositories = pendingTrackedRepositories - repository
         saveConfig()
-        statusLine = "Removed $repository"
+        statusLine = "Stopped tracking $repository"
     }
 
     fun removeOrganization(organization: String) {
@@ -564,90 +690,49 @@ class AppState {
         if (isRefreshing) return
 
         val repos = parseLines(repositoriesText)
-        if (repos.isEmpty()) {
-            val orgs = parseLines(organizationsText)
-            if (orgs.isNotEmpty()) {
-                discoverRepositoriesThenRefresh(orgs, showReminderAfterRefresh)
-                return
-            }
-
-            view = View.Settings
-            lastRefreshError = "Add at least one repository in Settings, or add an organization and use Discover repositories."
-            statusLine = "No repositories configured"
+        val organizations = parseLines(organizationsText)
+        if (repos.isEmpty() && organizations.isEmpty()) {
+            lastRefreshError = "No repositories are currently tracked. Open Tracking settings to add or discover repositories."
+            statusLine = "No repositories tracked"
             return
         }
 
-        refreshRepositories(repos, showReminderAfterRefresh)
+        refreshRepositories(repos, organizations, showReminderAfterRefresh)
     }
 
-    private fun refreshRepositories(repos: List<String>, showReminderAfterRefresh: Boolean = false) {
+    private fun refreshRepositories(
+        explicitRepositories: List<String>,
+        organizations: List<String>,
+        showReminderAfterRefresh: Boolean = false,
+    ) {
         GhClient.configureExecutable(ghPathText)
         isRefreshing = true
         isDiscovering = false
         lastRefreshStartedAt = Instant.now()
         lastRefreshError = null
         lastUndoReview = null
-        refreshTotal = repos.size
+        refreshTotal = explicitRepositories.size
         refreshDone = 0
-        refreshPhase = "Checking GitHub CLI…"
-        statusLine = "Checking GitHub CLI…"
-
-        scope.launch {
-            val startedAt = System.currentTimeMillis()
-            val collected = mutableListOf<PullRequest>()
-            try {
-                val login = withContext(Dispatchers.IO) { GhClient.prepareRefresh() }
-                repos.forEachIndexed { index, repo ->
-                    refreshDone = index
-                    refreshPhase = "Fetching $repo…"
-                    statusLine = "Refreshing ${index + 1} / ${repos.size} repositories…"
-                    val repoPullRequests = withContext(Dispatchers.IO) { GhClient.refreshRepository(repo, login) }
-                    collected += repoPullRequests
-                    refreshDone = index + 1
-                }
-                finishRefresh(startedAt, WorkerResult(value = dedupePullRequests(collected)), showReminderAfterRefresh = showReminderAfterRefresh)
-            } catch (error: Throwable) {
-                finishRefresh(startedAt, WorkerResult<List<PullRequest>>(error = error.message ?: error.toString()), showReminderAfterRefresh = showReminderAfterRefresh)
-            }
-        }
-    }
-
-    private fun discoverRepositoriesThenRefresh(orgs: List<String>, showReminderAfterRefresh: Boolean = false) {
-        GhClient.configureExecutable(ghPathText)
-        isRefreshing = true
-        isDiscovering = true
-        lastRefreshStartedAt = Instant.now()
-        lastRefreshError = null
-        refreshTotal = 0
-        refreshDone = 0
-        refreshPhase = "Discovering repositories…"
-        statusLine = "Discovering repositories before refresh…"
+        refreshPhase = if (organizations.isEmpty()) "Checking GitHub CLI…" else "Resolving organization scope…"
+        statusLine = refreshPhase
 
         scope.launch {
             val startedAt = System.currentTimeMillis()
             try {
-                val discoveredRepositories = withContext(Dispatchers.IO) { GhClient.discoverRepositories(orgs) }
-                if (discoveredRepositories.isEmpty()) error("No repositories were discovered from the configured organizations.")
-                repositoriesText = discoveredRepositories.joinToString("\n")
-                saveConfig()
-
-                val login = withContext(Dispatchers.IO) { GhClient.prepareRefresh() }
-                val collected = mutableListOf<PullRequest>()
-                isDiscovering = false
-                refreshTotal = discoveredRepositories.size
-                discoveredRepositories.forEachIndexed { index, repo ->
-                    refreshDone = index
-                    refreshPhase = "Fetching $repo…"
-                    statusLine = "Refreshing ${index + 1} / ${discoveredRepositories.size} repositories…"
-                    val repoPullRequests = withContext(Dispatchers.IO) { GhClient.refreshRepository(repo, login) }
-                    collected += repoPullRequests
-                    refreshDone = index + 1
+                val refreshed = pullRequestIntake.refreshScope(
+                    explicitRepositories = explicitRepositories,
+                    organizations = organizations,
+                ) { progress ->
+                    refreshTotal = progress.total
+                    refreshDone = progress.completed
+                    progress.repository?.let { repository ->
+                        refreshPhase = "Fetching $repository…"
+                        statusLine = "Refreshing ${progress.completed + 1} / ${progress.total} repositories…"
+                    }
                 }
-
                 finishRefresh(
                     startedAt,
-                    WorkerResult(value = dedupePullRequests(collected)),
-                    successPrefix = "Discovered ${discoveredRepositories.size} repositories · refreshed just now",
+                    WorkerResult(value = refreshed),
                     showReminderAfterRefresh = showReminderAfterRefresh,
                 )
             } catch (error: Throwable) {
@@ -673,38 +758,90 @@ class AppState {
         if (result.error != null) {
             lastRefreshError = result.error
             statusLine = "GitHub refresh failed · ${result.error}"
+
+            if (showReminderAfterRefresh || scheduledReminderPending) {
+                deliverScheduledReminderIfAllowed(refreshFailed = true)
+            }
         } else {
-            pullRequests = dedupePullRequests(result.value.orEmpty())
-            saveCache()
-            selectedPullRequest = selectedPullRequest?.let { selected ->
-                pullRequests.firstOrNull { candidate ->
-                    candidate.key == selected.key && candidate.source == selected.source
+            val refreshed = result.value.orEmpty()
+            val previousByKey = pullRequests.associateBy { it.key }
+
+            newPullRequestKeys = refreshed
+                .filter { it.key !in previousByKey }
+                .map { it.key }
+                .toSet()
+
+            updatedPullRequestKeys = refreshed
+                .filter { pr ->
+                    previousByKey[pr.key]?.updatedMarker
+                        ?.let { previousMarker -> previousMarker != pr.updatedMarker }
+                        ?: false
+                }
+                .map { it.key }
+                .toSet()
+
+            val changedReviewKeys = refreshed
+                .asSequence()
+                .filter { it.source == PullRequestSource.ReviewRequest }
+                .map { it.key }
+                .filter { it in newPullRequestKeys || it in updatedPullRequestKeys }
+                .toSet()
+            val currentScopeForChanges = currentQueueScopeFilter()
+            val hasChangedReviewHiddenByScope = changedReviewKeys.any { key ->
+                val pr = refreshed.firstOrNull { it.key == key } ?: return@any false
+                when (currentScopeForChanges) {
+                    QueueScopeFilter.All -> false
+                    is QueueScopeFilter.Organization -> pr.repository.owner != currentScopeForChanges.owner
+                    is QueueScopeFilter.Repository -> pr.repository.toString() != currentScopeForChanges.nameWithOwner
                 }
             }
+            if (
+                changedReviewKeys.isNotEmpty() &&
+                (view != View.NeedsReview || hasChangedReviewHiddenByScope)
+            ) {
+                needsReviewHasUnseenChanges = true
+            }
+
+            val refreshedKeys = refreshed.map { it.key }.toSet()
+            val removedCount = previousByKey.keys.count { it !in refreshedKeys }
+            refreshDelta = RefreshDelta(
+                newCount = newPullRequestKeys.size,
+                updatedCount = updatedPullRequestKeys.size,
+                removedCount = removedCount,
+            ).takeIf { it.totalChanges > 0 }
+
+            refreshSummaryJob?.cancel()
+            if (refreshDelta != null) {
+                refreshSummaryJob = scope.launch {
+                    delay(6_000)
+                    refreshDelta = null
+                }
+            }
+
+            replacePullRequests(refreshed)
+            saveCache()
             val reviews = reviewQueue().size
             statusLine = "$successPrefix · $reviews reviews waiting"
-            if (showReminderAfterRefresh) {
-                if (shouldShowReminderWindowNow()) {
-                    showScheduledReminderWindow()
-                    statusLine = "Reminder shown · $reviews reviews waiting"
-                } else {
-                    statusLine = if (reviews == 0) "Reminder checked · review queue clear" else "Reminder checked · reminder suppressed by settings"
-                }
+            if (showReminderAfterRefresh || scheduledReminderPending) {
+                deliverScheduledReminderIfAllowed()
             }
         }
     }
 
     fun discoverTargets() {
         if (isDiscovering) return
+
         GhClient.configureExecutable(ghPathText)
         val orgs = parseLines(organizationsText)
         if (orgs.isEmpty()) {
             statusLine = "Add one or more organizations before discovering repositories."
             return
         }
+
         isDiscovering = true
         ghTestResult = null
         statusLine = "Discovering repositories…"
+
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching { GhClient.discoverRepositories(orgs) }
@@ -713,84 +850,241 @@ class AppState {
                         onFailure = { WorkerResult(error = it.message ?: it.toString()) },
                     )
             }
+
             isDiscovering = false
             if (result.error != null) {
                 statusLine = "Discover failed · ${result.error}"
-            } else {
-                if (result.value.orEmpty().isEmpty()) {
-                    statusLine = "Discover found no repositories for the configured organizations."
-                    return@launch
-                }
-                val merged = (parseLines(repositoriesText) + result.value.orEmpty()).distinct().sorted()
-                repositoriesText = merged.joinToString("\n")
-                saveConfig()
-                statusLine = "Discovered ${result.value.orEmpty().size} repositories"
+                return@launch
+            }
+
+            val discovered = result.value.orEmpty().distinct().sorted()
+            if (discovered.isEmpty()) {
+                discoveredTrackingRepositories = emptyList()
+                pendingTrackedRepositories = emptySet()
+                statusLine = "Discover found no repositories for the configured organizations."
+                return@launch
+            }
+
+            val currentlyTracked = parseLines(repositoriesText).toSet()
+            discoveredTrackingRepositories = (discovered + currentlyTracked)
+                .distinct()
+                .sorted()
+            pendingTrackedRepositories = currentlyTracked
+
+            val newCount = discovered.count { it !in currentlyTracked }
+            statusLine = buildString {
+                append("Discovered ${discovered.size} repositories")
+                append(" · ${currentlyTracked.size} currently tracked")
+                if (newCount > 0) append(" · $newCount available to add")
             }
         }
     }
 
-    fun visiblePullRequests(): List<PullRequest> {
-        val query = searchQuery.trim().lowercase()
-        val effectiveView = if (focusReviewMode && view != View.Settings && view != View.Handled && view != View.Pinned) View.NeedsReview else view
-        val base = when (effectiveView) {
-            View.Today -> todayPullRequests()
-            View.NeedsReview -> reviewQueue()
-            View.Pinned -> pinnedPullRequests()
-            View.Mine -> activePullRequests().filter { it.source == PullRequestSource.Mine }
-            View.Blocked -> activePullRequests().filter { attentionKind(it) == AttentionKind.Blocked }
-            View.Ready -> activePullRequests().filter { attentionKind(it) == AttentionKind.Ready }
-            View.Handled -> handledPullRequests()
-            View.Settings -> emptyList()
-        }
-        return base
-            .filter { query.isEmpty() || it.title.lowercase().contains(query) || it.repository.toString().lowercase().contains(query) || it.number.toString().contains(query) }
-            .let { sortPullRequests(effectiveView, it) }
+    fun togglePendingTrackedRepository(repository: String) {
+        pendingTrackedRepositories =
+            if (repository in pendingTrackedRepositories) {
+                pendingTrackedRepositories - repository
+            } else {
+                pendingTrackedRepositories + repository
+            }
     }
 
-    fun activePullRequests(): List<PullRequest> = pullRequests.filterNot { isRepositoryMuted(it.repository.toString()) }
+    fun selectAllDiscoveredTrackingRepositories() {
+        pendingTrackedRepositories = discoveredTrackingRepositories.toSet()
+    }
+
+    fun clearPendingTrackingSelection() {
+        pendingTrackedRepositories = emptySet()
+    }
+
+    fun cancelTrackingDiscovery() {
+        discoveredTrackingRepositories = emptyList()
+        pendingTrackedRepositories = emptySet()
+        repositoryDiscoveryQuery = ""
+        statusLine = "Repository selection cancelled"
+    }
+
+    fun applyTrackingRepositorySelection() {
+        repositoriesText = pendingTrackedRepositories
+            .sorted()
+            .joinToString("\n")
+        organizationsText = ""
+        saveConfig()
+
+        val trackedCount = pendingTrackedRepositories.size
+        discoveredTrackingRepositories = emptyList()
+        pendingTrackedRepositories = emptySet()
+        repositoryDiscoveryQuery = ""
+        statusLine = "Tracking $trackedCount ${if (trackedCount == 1) "repository" else "repositories"}"
+    }
+
+    fun discoverGitHubScope() {
+        if (isDiscovering) return
+        GhClient.configureExecutable(ghPathText)
+        isDiscovering = true
+        repositoryDiscoveryError = null
+        statusLine = "Discovering organizations and repositories…"
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { GhClient.discoverScope() }
+            }
+            isDiscovering = false
+            result.onSuccess { discovered ->
+                repositoryDiscovery = discovered
+                val existingOrganizations = parseLines(organizationsText)
+                repositoryScopeSelection = RepositoryScopeSelection(
+                    organizationScopes = (
+                            repositoryScopeSelection.organizationScopes +
+                                    existingOrganizations.associateWith { OrganizationScope.All }
+                            ),
+                    individualRepositories = (
+                            repositoryScopeSelection.individualRepositories +
+                                    parseLines(repositoriesText)
+                            ),
+                )
+                statusLine = "Discovered ${discovered.organizations.size} organizations and ${discovered.repositories.count { !it.archived }} repositories"
+            }.onFailure { error ->
+                repositoryDiscoveryError = error.message ?: "Repository discovery failed"
+                statusLine = "Discovery failed · ${repositoryDiscoveryError}"
+            }
+        }
+    }
+
+    fun setOrganizationScope(
+        organization: String,
+        scope: OrganizationScope,
+    ) {
+        repositoryScopeSelection = repositoryScopeSelection.copy(
+            organizationScopes = repositoryScopeSelection.organizationScopes + (organization to scope),
+        )
+    }
+
+    fun toggleDiscoveredRepository(repository: String) {
+        val selected = repositoryScopeSelection.individualRepositories
+        repositoryScopeSelection = repositoryScopeSelection.copy(
+            individualRepositories = if (repository in selected) {
+                selected - repository
+            } else {
+                selected + repository
+            },
+        )
+    }
+
+    fun applyRepositoryScopeSelection() {
+        val discovered = repositoryDiscovery ?: return
+        val active = repositoryScopeSelection
+            .activeRepositories(discovered.repositories)
+            .sorted()
+        repositoriesText = active.joinToString("\n")
+        organizationsText = repositoryScopeSelection.organizationScopes
+            .filterValues { it == OrganizationScope.All }
+            .keys
+            .sorted()
+            .joinToString("\n")
+        saveConfig()
+        statusLine = "Saved repository scope · ${active.size} repositories"
+    }
+
+    fun visiblePullRequests(): List<PullRequest> {
+        return ReviewQueue.visible(
+            pullRequests = pullRequests,
+            view = view,
+            searchQuery = searchQuery,
+            scope = currentQueueScopeFilter(),
+            handledReviewRecords = handledReviewRecords,
+            pinnedPullRequestKeys = pinnedPrKeys,
+            mutedRepositories = parseLines(mutedRepositoriesText).toSet(),
+            sortMode = sortMode,
+            staleThresholdDays = staleThresholdDaysText.toLongOrNull()?.coerceIn(1L, 30L) ?: 2L,
+        )
+    }
+
+    fun setQueueScopeFilter(filter: QueueScopeFilter) {
+        if (view == View.NeedsReview && filter == QueueScopeFilter.All) {
+            needsReviewHasUnseenChanges = false
+        }
+        // Repository scope is global because the control lives above every queue in the sidebar.
+        // Keep the map shape for compatibility with the command layer, but store one shared value.
+        queueScopeFilters = View.entries.associateWith { filter }
+        expandedPullRequestKey = null
+        selectedPullRequest = selectedPullRequest
+            ?.takeIf { selected ->
+                visiblePullRequests().any {
+                    it.key == selected.key && it.source == selected.source
+                }
+            }
+            ?: visiblePullRequests().firstOrNull()
+    }
+
+    fun currentQueueScopeFilter(): QueueScopeFilter =
+        queueScopeFilters[View.NeedsReview]
+            ?: queueScopeFilters.values.firstOrNull()
+            ?: QueueScopeFilter.All
+
+    fun clearQueueScopeFilter() {
+        setQueueScopeFilter(QueueScopeFilter.All)
+        statusLine = "Repository scope cleared"
+    }
+
+    fun activePullRequests(): List<PullRequest> =
+        ReviewQueue.activePullRequests(pullRequests, parseLines(mutedRepositoriesText).toSet())
+
+    fun replacePullRequests(items: List<PullRequest>) {
+        val selected = selectedPullRequest
+        val previousIndex = selected?.let { previous ->
+            visiblePullRequests().indexOfFirst {
+                it.key == previous.key && it.source == previous.source
+            }
+        } ?: -1
+        pullRequests = dedupePullRequests(items)
+        val visible = visiblePullRequests()
+        selectedPullRequest = selected?.let { previous ->
+            visible.firstOrNull { it.key == previous.key && it.source == previous.source }
+        } ?: visible.getOrNull(previousIndex.coerceAtMost(visible.lastIndex))
+                ?: visible.firstOrNull()
+        if (view != View.Settings) {
+            keyboardFocusRegion = FocusRegion.PullRequestList
+        }
+        if (expandedPullRequestKey !in visible.map { it.key }.toSet()) {
+            expandedPullRequestKey = null
+        }
+    }
 
     fun pinnedPullRequests(): List<PullRequest> = activePullRequests()
         .filter { pinnedPrKeys.contains(it.key) }
         .let { sortPullRequests(View.Pinned, it) }
 
-    fun handledPullRequests(): List<PullRequest> = activePullRequests()
-        .filter { it.source == PullRequestSource.ReviewRequest }
-        .filter { isHandledCurrent(it) }
+    fun handledPullRequests(): List<PullRequest> = ReviewQueue.visible(
+        pullRequests = pullRequests,
+        view = View.Handled,
+        searchQuery = "",
+        scope = QueueScopeFilter.All,
+        handledReviewRecords = handledReviewRecords,
+        pinnedPullRequestKeys = pinnedPrKeys,
+        mutedRepositories = parseLines(mutedRepositoriesText).toSet(),
+        sortMode = sortMode,
+        staleThresholdDays = staleThresholdDaysText.toLongOrNull()?.coerceIn(1L, 30L) ?: 2L,
+    )
         .let { sortPullRequests(View.Handled, it) }
 
-    fun reviewQueue(): List<PullRequest> = activePullRequests()
-        .filter { it.source == PullRequestSource.ReviewRequest }
-        .filterNot { isHandledCurrent(it) }
+    fun reviewQueue(): List<PullRequest> = ReviewQueue.reviewQueue(
+        pullRequests = pullRequests,
+        handledReviewRecords = handledReviewRecords,
+        mutedRepositories = parseLines(mutedRepositoriesText).toSet(),
+    )
         .let { sortPullRequests(View.NeedsReview, it) }
 
-    fun todayPullRequests(): List<PullRequest> {
-        val needsReview = reviewQueue()
-        val myAction = activePullRequests().filter {
-            it.source == PullRequestSource.Mine && ownPullRequestNeedsAction(it)
-        }
-        val ready = activePullRequests().filter {
-            it.source == PullRequestSource.Mine &&
-                    ownPullRequestPrimaryStatus(it) == OwnPullRequestStatus.ApprovedAndReady
-        }
-        return sortPullRequests(View.Today, dedupePullRequests(needsReview + myAction + ready))
-    }
-
-    fun startReviewing() {
-        val queue = reviewQueue()
-        view = View.NeedsReview
-        reviewSessionActive = true
-        reviewSessionQueueKeys = queue.map { it.key }
-        sessionHandledCount = 0
-        selectedPullRequest = queue.firstOrNull()
-        statusLine = if (selectedPullRequest == null) "Review queue clear" else "Review session started"
-    }
-
-    fun endReviewSession() {
-        reviewSessionActive = false
-        reviewSessionQueueKeys = emptyList()
-        sessionHandledCount = 0
-        statusLine = "Review session ended"
-    }
+    fun todayPullRequests(): List<PullRequest> = ReviewQueue.visible(
+        pullRequests = pullRequests,
+        view = View.Today,
+        searchQuery = "",
+        scope = QueueScopeFilter.All,
+        handledReviewRecords = handledReviewRecords,
+        pinnedPullRequestKeys = pinnedPrKeys,
+        mutedRepositories = parseLines(mutedRepositoriesText).toSet(),
+        sortMode = sortMode,
+        staleThresholdDays = staleThresholdDaysText.toLongOrNull()?.coerceIn(1L, 30L) ?: 2L,
+    )
 
     fun nextReview() {
         val reviews = reviewQueue()
@@ -810,16 +1104,12 @@ class AppState {
             }
         }
 
-        if (selectedPullRequest == null) {
-            statusLine = "Review session complete"
+        expandedPullRequestKey = null
+        statusLine = if (selectedPullRequest == null) {
+            "Review queue clear"
+        } else {
+            "Skipped for now · ${selectedPullRequest!!.repository} #${selectedPullRequest!!.number}"
         }
-    }
-
-    fun previousReview() {
-        val reviews = reviewQueue()
-        val current = selectedPullRequest ?: return
-        val index = reviews.indexOfFirst { it.key == current.key }
-        selectedPullRequest = reviews.getOrNull(max(0, index - 1))
     }
 
     fun markReviewed(pr: PullRequest? = selectedPullRequest) {
@@ -842,11 +1132,8 @@ class AppState {
         lastUndoReview = HandledUndo(pr, pr.updatedMarker)
         saveHandled()
 
-        if (reviewSessionActive) {
-            sessionHandledCount += 1
-        }
-
         statusLine = "Marked reviewed · ${pr.repository} #${pr.number}"
+        publishActionFeedback("Marked #${pr.number} as handled")
 
         val remaining = reviewQueue()
         selectedPullRequest = preferredNextKeys.firstNotNullOfOrNull { key ->
@@ -868,13 +1155,17 @@ class AppState {
     }
 
     fun openSelectedInGitHub() {
-        selectedPullRequest?.let { openUrl(it.url) }
+        selectedPullRequest?.let {
+            openUrl(it.url)
+            publishActionFeedback("Opened #${it.number} in browser")
+        }
     }
 
     fun copySelectedUrl() {
         val pr = selectedPullRequest ?: return
         copyToClipboard(pr.url)
         statusLine = "Copied ${pr.repository} #${pr.number} URL"
+        publishActionFeedback("PR URL copied")
     }
 
     fun openSelectedRepository() {
@@ -882,15 +1173,9 @@ class AppState {
         openUrl("https://github.com/${pr.repository}")
     }
 
-    fun toggleFocusMode() {
-        focusReviewMode = !focusReviewMode
-        selectedPullRequest = null
-        if (focusReviewMode && view != View.Settings) view = View.NeedsReview
-        statusLine = if (focusReviewMode) "Focus review mode enabled" else "Focus review mode disabled"
-    }
-
     fun clearFilter() {
         searchQuery = ""
+        setQueueScopeFilter(QueueScopeFilter.All)
         statusLine = "Filter cleared"
     }
 
@@ -921,11 +1206,23 @@ class AppState {
     fun isHandledCurrent(pr: PullRequest): Boolean = handledReviewRecords[pr.key] == pr.updatedMarker
 
     fun selectView(next: View) {
+        selectedPullRequest?.let { selected ->
+            queueSelectionKeys = queueSelectionKeys + (view to selected.key)
+        }
         view = next
-        selectedPullRequest = null
-        reviewSessionActive = false
-        reviewSessionQueueKeys = emptyList()
-        sessionHandledCount = 0
+        if (
+            next == View.NeedsReview &&
+            currentQueueScopeFilter() == QueueScopeFilter.All
+        ) {
+            needsReviewHasUnseenChanges = false
+        }
+        val rememberedKey = queueSelectionKeys[next]
+        selectedPullRequest = if (next == View.Settings) {
+            null
+        } else {
+            QueueContext.restoreSelection(visiblePullRequests(), rememberedKey)
+        }
+        expandedPullRequestKey = null
         keyboardMode = KeyboardMode.Normal
         if (next in SidebarKeyboardViews) {
             sidebarKeyboardView = next
@@ -935,13 +1232,111 @@ class AppState {
         }
     }
 
+    fun openTrackingSettings() {
+        settingsSectionIndex = 2
+        settingsFocusedRowIndex = 0
+        selectView(View.Settings)
+    }
+
+    fun showSidebarNavigationHintOnce() {
+        if (sidebarNavigationHintShownThisSession) return
+        sidebarNavigationHintShownThisSession = true
+        sidebarNavigationHintVisible = true
+        scope.launch {
+            delay(2_800)
+            sidebarNavigationHintVisible = false
+        }
+    }
+
+    fun queueViewportState(view: View): QueueViewportState? = queueViewportStates[view]
+
+    fun rememberQueueViewport(
+        view: View,
+        firstVisibleItemIndex: Int,
+        firstVisibleItemScrollOffset: Int,
+    ) {
+        queueViewportStates = queueViewportStates + (
+                view to QueueViewportState(
+                    firstVisibleItemIndex = firstVisibleItemIndex.coerceAtLeast(0),
+                    firstVisibleItemScrollOffset = firstVisibleItemScrollOffset.coerceAtLeast(0),
+                )
+                )
+    }
+
     fun isPinned(pr: PullRequest): Boolean = pinnedPrKeys.contains(pr.key)
 
     fun togglePin(pr: PullRequest? = selectedPullRequest) {
         pr ?: return
         pinnedPrKeys = if (pinnedPrKeys.contains(pr.key)) pinnedPrKeys - pr.key else pinnedPrKeys + pr.key
         savePinned()
-        statusLine = if (pinnedPrKeys.contains(pr.key)) "Pinned ${pr.repository} #${pr.number}" else "Unpinned ${pr.repository} #${pr.number}"
+        val action = if (pinnedPrKeys.contains(pr.key)) "Pinned" else "Unpinned"
+        statusLine = "$action ${pr.repository} #${pr.number}"
+        actionFeedbackSequence += 1
+        actionFeedback = ActionFeedback("$action #${pr.number}", actionFeedbackSequence)
+    }
+
+    fun togglePullRequestDetails(pr: PullRequest) {
+        selectedPullRequest = pr
+        newPullRequestKeys = newPullRequestKeys - pr.key
+        updatedPullRequestKeys = updatedPullRequestKeys - pr.key
+        expandedPullRequestKey = if (expandedPullRequestKey == pr.key) null else pr.key
+    }
+
+    fun toggleSelectedPullRequestDetails() {
+        val pr = selectedPullRequest ?: return
+        togglePullRequestDetails(pr)
+    }
+
+    fun isPullRequestReadyToMerge(pr: PullRequest?): Boolean {
+        return pr?.let { PullRequestAttention.describe(it).canMerge } ?: false
+    }
+
+    fun canMergePullRequest(pr: PullRequest?): Boolean =
+        isPullRequestReadyToMerge(pr) && !isMergingPullRequest
+
+    fun performSelectedMAction() {
+        val pr = selectedPullRequest ?: return
+        when {
+            pr.source == PullRequestSource.ReviewRequest -> markReviewed(pr)
+            canMergePullRequest(pr) -> mergePullRequest(pr)
+            else -> publishActionFeedback("Selected PR is not ready to merge")
+        }
+    }
+
+    fun mergePullRequest(pr: PullRequest? = selectedPullRequest) {
+        pr ?: return
+        if (!canMergePullRequest(pr)) {
+            publishActionFeedback("PR #${pr.number} is not ready to merge")
+            return
+        }
+
+        GhClient.configureExecutable(ghPathText)
+        isMergingPullRequest = true
+        mergingPullRequestKey = pr.key
+        statusLine = "Merging ${pr.repository} #${pr.number}…"
+
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { GhClient.mergePullRequest(pr) }
+                    .fold(
+                        onSuccess = { WorkerResult(value = it) },
+                        onFailure = { WorkerResult(error = it.message ?: it.toString()) },
+                    )
+            }
+
+            isMergingPullRequest = false
+            mergingPullRequestKey = null
+
+            if (result.error != null) {
+                statusLine = "Merge failed · ${result.error}"
+                publishActionFeedback("Merge failed for #${pr.number}")
+                return@launch
+            }
+
+            publishActionFeedback("Merged #${pr.number}")
+            statusLine = result.value ?: "Merged ${pr.repository} #${pr.number}"
+            refresh()
+        }
     }
 
     fun savePinned() {
@@ -976,6 +1371,7 @@ class AppState {
         val pr = selectedPullRequest ?: return
         copyToClipboard("[${pr.repository} #${pr.number}: ${pr.title}](${pr.url})")
         statusLine = "Copied PR as Markdown"
+        publishActionFeedback("Markdown copied")
     }
 
     fun copyReviewDigest() {
@@ -1018,6 +1414,7 @@ class AppState {
             appendLine("review queue: ${reviewQueue().size}")
             appendLine("auto refresh: $autoRefreshEnabled every ${autoRefreshIntervalMinutesText.ifBlank { "5" }} minutes")
             appendLine("reminders: $reminderEnabled at ${reminderTimeText.ifBlank { "09:00" }}; ${reminderStatus}")
+            appendLine(displayDiagnostics)
             appendLine("last error: ${lastRefreshError ?: "none"}")
         }
         diagnosticsText = text
@@ -1027,6 +1424,11 @@ class AppState {
 
     fun recordCommandExecution(commandId: CommandId) {
         recentCommandIds = (listOf(commandId) + recentCommandIds.filterNot { it == commandId }).take(6)
+    }
+
+    fun publishActionFeedback(message: String) {
+        actionFeedbackSequence += 1
+        actionFeedback = ActionFeedback(message, actionFeedbackSequence)
     }
 
     fun recordPaletteTarget(target: String) {
@@ -1058,7 +1460,7 @@ class AppState {
         val staleDays = staleThresholdDaysText.toLongOrNull()?.coerceIn(1L, 30L) ?: 2L
         val urgencyOrder: (PullRequest) -> Int = { pr ->
             when {
-                pinnedPrKeys.contains(pr.key) -> 0
+                view == View.Pinned && pinnedPrKeys.contains(pr.key) -> 0
                 pr.source == PullRequestSource.ReviewRequest && isOlderThan(pr.updatedAt, staleDays) -> 10
                 pr.source == PullRequestSource.ReviewRequest -> 20
                 pr.source == PullRequestSource.Mine -> when (ownPullRequestPrimaryStatus(pr)) {
@@ -1079,7 +1481,12 @@ class AppState {
             "Updated oldest" -> prs.sortedBy { instantOrNull(it.updatedAt) ?: Instant.EPOCH }
             "Repository" -> prs.sortedWith(compareBy<PullRequest> { it.repository.toString() }.thenBy { it.number })
             "Comments" -> prs.sortedByDescending { it.comments }
-            else -> prs.sortedWith(compareBy<PullRequest> { urgencyOrder(it) }.thenBy { instantOrNull(it.updatedAt) ?: Instant.EPOCH })
+            else -> prs.sortedWith(
+                compareBy<PullRequest> { urgencyOrder(it) }
+                    .thenBy { instantOrNull(it.updatedAt) ?: Instant.EPOCH }
+                    .thenBy { it.repository.toString() }
+                    .thenBy { it.number },
+            )
         }
     }
 
@@ -1109,8 +1516,13 @@ class AppState {
         reminderDismissedDate = LocalDate.now().toString()
         saveReminderState()
         startReminderScheduler()
-        startReviewing()
-        statusLine = "Review reminder handled · review session started"
+        selectView(View.NeedsReview)
+        selectedPullRequest = reviewQueue().firstOrNull()
+        statusLine = if (selectedPullRequest == null) {
+            "Review reminder handled · review queue clear"
+        } else {
+            "Review reminder handled · review queue opened"
+        }
     }
 
     fun snoozeReminder() {
@@ -1136,15 +1548,30 @@ class AppState {
 
     fun saveReminderState() {
         Files.createDirectories(configDir)
-        reminderEnabledFile.writeLines(listOf(reminderEnabled.toString()))
-        reminderTimeFile.writeLines(listOf(reminderTimeText.trim().ifBlank { "09:00" }))
-        reminderDaysFile.writeLines(listOf(reminderDaysText.trim().ifBlank { "Mon-Fri" }))
-        reminderQuietHoursFile.writeLines(listOf(quietHoursText.trim().ifBlank { "18:00-08:00" }))
-        reminderOnlyWhenQueueFile.writeLines(listOf(remindOnlyWhenQueueNotClear.toString()))
-        reminderSnoozeMinutesFile.writeLines(listOf(reminderSnoozeMinutesText.trim().ifBlank { "60" }))
+        settingsStore.save(currentSettings())
         reminderSnoozedUntil?.let { reminderSnoozedUntilFile.writeLines(listOf(it.toString())) } ?: Files.deleteIfExists(reminderSnoozedUntilFile)
         reminderDismissedDate?.let { reminderDismissedDateFile.writeLines(listOf(it)) } ?: Files.deleteIfExists(reminderDismissedDateFile)
     }
+
+    private fun currentSettings(): RevqSettings = RevqSettings(
+        repositories = parseLines(repositoriesText),
+        organizations = parseLines(organizationsText),
+        githubExecutable = ghPathText.trim(),
+        githubDetectionSource = ghDetectionSource,
+        mutedRepositories = parseLines(mutedRepositoriesText),
+        autoRefreshEnabled = autoRefreshEnabled,
+        autoRefreshIntervalMinutes = autoRefreshIntervalMinutesText.trim().ifBlank { "5" },
+        sortMode = sortMode.ifBlank { "Urgency" },
+        groupByRepository = groupByRepository,
+        staleThresholdDays = staleThresholdDaysText.trim().ifBlank { "2" },
+        compactRows = compactRows,
+        reminderEnabled = reminderEnabled,
+        reminderTime = reminderTimeText.trim().ifBlank { "09:00" },
+        reminderDays = reminderDaysText.trim().ifBlank { "Mon-Fri" },
+        quietHours = quietHoursText.trim().ifBlank { "18:00-08:00" },
+        remindOnlyWhenQueueNotClear = remindOnlyWhenQueueNotClear,
+        reminderSnoozeMinutes = reminderSnoozeMinutesText.trim().ifBlank { "60" },
+    )
 
     fun startReminderScheduler() {
         reminderSchedulerJob?.cancel()
@@ -1153,10 +1580,26 @@ class AppState {
             // the window on app startup just because today's configured time is already in the past.
             while (true) {
                 if (!reminderEnabled) {
+                    scheduledReminderPending = false
                     nextReminderAt = null
                     reminderStatus = "Reminders disabled"
                     delay(30_000)
                     continue
+                }
+
+                if (scheduledReminderPending) {
+                    if (showReminderWindow) {
+                        scheduledReminderPending = false
+                    } else if (isRefreshing) {
+                        reminderStatus = "Reminder due · waiting for refresh"
+                        statusLine = "Reminder due · waiting for refresh"
+                        delay(1_000)
+                        continue
+                    } else {
+                        runScheduledReminderCheck()
+                        delay(1_000)
+                        continue
+                    }
                 }
 
                 val scheduledAt = nextReminderInstant(Instant.now())
@@ -1168,17 +1611,30 @@ class AppState {
                 delay(waitMs)
 
                 val dueAt = nextReminderAt
-                if (dueAt != null && !Instant.now().isBefore(dueAt) && !showReminderWindow && !isRefreshing) {
-                    runScheduledReminderCheck()
+                if (dueAt != null && !Instant.now().isBefore(dueAt) && !showReminderWindow) {
+                    scheduledReminderPending = true
+                    if (isRefreshing) {
+                        reminderStatus = "Reminder due · waiting for refresh"
+                        statusLine = "Reminder due · waiting for refresh"
+                    } else {
+                        runScheduledReminderCheck()
+                    }
                 }
             }
         }
     }
 
     private fun runScheduledReminderCheck() {
-        if (!reminderEnabled) return
+        if (!reminderEnabled) {
+            scheduledReminderPending = false
+            reminderStatus = "Reminders disabled"
+            return
+        }
+
         if (isTodayDismissed()) {
-            statusLine = "Reminder already dismissed today"
+            scheduledReminderPending = false
+            reminderStatus = "Reminder suppressed · dismissed today"
+            statusLine = "Reminder suppressed · dismissed today"
             return
         }
 
@@ -1189,38 +1645,67 @@ class AppState {
         }
 
         val repos = parseLines(repositoriesText)
-        val orgs = parseLines(organizationsText)
-        if (repos.isEmpty() && orgs.isEmpty()) {
-            statusLine = "Reminder skipped · no repositories configured"
+        if (repos.isEmpty()) {
+            scheduledReminderPending = false
+            reminderStatus = "Reminder skipped · no repositories tracked"
+            statusLine = "Reminder skipped · no repositories tracked"
             return
         }
 
+        if (isRefreshing) {
+            reminderStatus = "Reminder due · waiting for refresh"
+            statusLine = "Reminder due · waiting for refresh"
+            return
+        }
+
+        reminderStatus = "Reminder due · refreshing review queue"
         statusLine = "Reminder time reached · refreshing review queue…"
         refresh(showReminderAfterRefresh = true)
     }
 
-    private fun shouldShowReminderWindowNow(): Boolean {
-        if (!reminderEnabled) return false
-        if (isTodayDismissed()) return false
-        if (isInReminderQuietHours()) return false
-        if (remindOnlyWhenQueueNotClear && reviewQueue().isEmpty()) return false
-        return true
+    private fun reminderSuppressionReason(): String? {
+        return when (val decision = ReviewReminder.dueDecision(
+            ReviewReminderInput(
+                enabled = reminderEnabled,
+                now = Instant.now(),
+                localDate = LocalDate.now(),
+                localTime = LocalTime.now(),
+                dismissedDate = reminderDismissedDate,
+                snoozedUntil = reminderSnoozedUntil,
+                quietHours = quietHoursText,
+                onlyWhenQueueNotClear = remindOnlyWhenQueueNotClear,
+                reviewQueueSize = reviewQueue().size,
+            ),
+        )) {
+            ReviewReminderDecision.Show -> null
+            is ReviewReminderDecision.Suppress -> decision.reason
+        }
+    }
+
+    private fun deliverScheduledReminderIfAllowed(refreshFailed: Boolean = false) {
+        scheduledReminderPending = false
+
+        val suppressionReason = reminderSuppressionReason()
+        if (suppressionReason != null) {
+            reminderStatus = "Reminder suppressed · $suppressionReason"
+            statusLine = "Reminder suppressed · $suppressionReason"
+            return
+        }
+
+        showScheduledReminderWindow()
+        val reviews = reviewQueue().size
+        reminderStatus = if (refreshFailed) {
+            "Reminder shown · refresh failed, using cached queue"
+        } else {
+            "Reminder shown · $reviews reviews waiting"
+        }
+        statusLine = reminderStatus
     }
 
     private fun isTodayDismissed(): Boolean = reminderDismissedDate == LocalDate.now().toString()
 
     private fun isInReminderQuietHours(now: LocalTime = LocalTime.now()): Boolean {
-        val raw = quietHoursText.trim()
-        if (raw.isBlank() || raw.equals("Off", ignoreCase = true) || raw.equals("Disabled", ignoreCase = true)) return false
-        val parts = raw.split("-", limit = 2).map { it.trim() }
-        if (parts.size != 2) return false
-        val start = parseReminderTime(parts[0]) ?: return false
-        val end = parseReminderTime(parts[1]) ?: return false
-        return if (start <= end) {
-            now >= start && now < end
-        } else {
-            now >= start || now < end
-        }
+        return ReviewReminder.isInQuietHours(quietHoursText, now)
     }
 
     private fun nextReminderInstant(now: Instant): Instant {
@@ -1298,7 +1783,7 @@ fun currentDesktopPlatform(): DesktopPlatform {
     }
 }
 
-object GhClient {
+object GhClient : PullRequestIntakeGateway {
     @Volatile
     private var configuredExecutable: String? = null
 
@@ -1310,9 +1795,9 @@ object GhClient {
 
     fun detectExecutableResult(): GhDetectionResult? = detectGhExecutableResult()
 
-    fun discoverRepositories(orgs: List<String>): List<String> {
+    override fun discoverRepositories(organizations: List<String>): List<String> {
         ensureAuthenticated()
-        return orgs.flatMap { org ->
+        return organizations.flatMap { org ->
             runGh(
                 "repo", "list", org,
                 "--limit", "100",
@@ -1322,22 +1807,76 @@ object GhClient {
         }.distinct().sorted()
     }
 
+    fun discoverScope(): RepositoryDiscoveryResult {
+        ensureAuthenticated()
+        val login = currentLogin()
+        val organizations = runGh(
+            "api", "user/orgs", "--paginate", "--jq", ".[].login",
+        )
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+            .sorted()
+            .map(::DiscoveredOrganization)
+            .toList()
+
+        val owners = listOf(login) + organizations.map { it.login }
+        val repositories = owners.flatMap { owner ->
+            runGh(
+                "repo", "list", owner,
+                "--limit", "1000",
+                "--json", "nameWithOwner,isArchived,isPrivate",
+                "--template",
+                "{{range .}}{{.nameWithOwner}}{{\"\\t\"}}{{.isArchived}}{{\"\\t\"}}{{.isPrivate}}{{\"\\n\"}}{{end}}",
+            )
+                .lineSequence()
+                .mapNotNull { line ->
+                    val parts = line.split("\t")
+                    val nameWithOwner = parts.getOrNull(0)?.trim().orEmpty()
+                    if ("/" !in nameWithOwner) return@mapNotNull null
+                    DiscoveredRepository(
+                        nameWithOwner = nameWithOwner,
+                        owner = owner,
+                        archived = parts.getOrNull(1)?.toBooleanStrictOrNull() ?: false,
+                        private = parts.getOrNull(2)?.toBooleanStrictOrNull() ?: false,
+                    )
+                }
+        }
+            .distinctBy { it.nameWithOwner }
+            .sortedBy { it.nameWithOwner }
+
+        return RepositoryDiscoveryResult(
+            login = login,
+            organizations = organizations,
+            repositories = repositories,
+        )
+    }
+
     fun refresh(repositories: List<String>): List<PullRequest> {
         val login = prepareRefresh()
         return dedupePullRequests(repositories.flatMap { repo -> refreshRepository(repo, login) })
     }
 
-    fun prepareRefresh(): String {
+    override fun prepareRefresh(): String {
         ensureAuthenticated()
         return currentLogin()
     }
 
-    fun refreshRepository(repo: String, login: String): List<PullRequest> {
+    override fun refreshRepository(repo: String, login: String): List<PullRequest> {
         val reviewRequests = listPrs(
             repo = repo,
             source = PullRequestSource.ReviewRequest,
             search = "is:pr is:open review-requested:$login",
             author = null,
+            viewerLogin = login,
+        ).filterNot { it.authorLogin?.equals(login, ignoreCase = true) == true }
+        val assignments = listPrs(
+            repo = repo,
+            source = PullRequestSource.ReviewRequest,
+            search = "is:pr is:open assignee:$login",
+            author = null,
+            viewerLogin = login,
         ).filterNot { it.authorLogin?.equals(login, ignoreCase = true) == true }
 
         val mine = listPrs(
@@ -1345,6 +1884,7 @@ object GhClient {
             source = PullRequestSource.Mine,
             search = null,
             author = login,
+            viewerLogin = login,
         )
 
         val discussionInsights = runCatching {
@@ -1362,7 +1902,21 @@ object GhClient {
             )
         }
 
-        return dedupePullRequests(reviewRequests + enrichedMine)
+        return dedupePullRequests(reviewRequests + assignments + enrichedMine)
+    }
+
+    fun mergePullRequest(pr: PullRequest): String {
+        ensureAuthenticated()
+        val endpoint = "repos/${pr.repository.owner}/${pr.repository.name}/pulls/${pr.number}/merge"
+
+        return runGh(
+            "api",
+            endpoint,
+            "-X", "PUT",
+            "--jq", ".message // if .merged then \"Pull Request successfully merged\" else \"Merge request did not complete\" end",
+        ).ifBlank {
+            "Merged ${pr.repository} #${pr.number}"
+        }
     }
 
     fun testConnection(): String {
@@ -1387,6 +1941,7 @@ object GhClient {
         source: PullRequestSource,
         search: String?,
         author: String?,
+        viewerLogin: String,
     ): List<PullRequest> {
         val repoId = parseRepo(repo) ?: error("Invalid repository '$repo'. Expected OWNER/REPO.")
         val args = mutableListOf(
@@ -1415,6 +1970,7 @@ object GhClient {
             (.comments // []) as ${'$'}comments |
             (.statusCheckRollup // []) as ${'$'}checks |
             (.reviewRequests // []) as ${'$'}reviewRequests |
+            (.assignees // []) as ${'$'}assignees |
             (.latestReviews // []) as ${'$'}latestReviews |
             ([${'$'}checks[]? | select(
                 (.conclusion == "FAILURE") or
@@ -1435,6 +1991,7 @@ object GhClient {
             (${'$'}checks | length) as ${'$'}checksTotal |
             (${'$'}checksTotal - ${'$'}checksFailing - ${'$'}checksPassing) as ${'$'}checksPending |
             ([${'$'}reviewRequests[]? | reviewerLabel] | unique | join(",")) as ${'$'}requestedReviewers |
+            ([${'$'}assignees[]? | reviewerLabel] | unique | join(",")) as ${'$'}assignees |
             ([${'$'}latestReviews[]? | select(.state == "CHANGES_REQUESTED") | (.author.login // empty) | "@" + .] | unique | join(",")) as ${'$'}changeRequestReviewers |
             ([${'$'}latestReviews[]? | select(.state == "APPROVED") | (.author.login // empty) | "@" + .] | unique | join(",")) as ${'$'}approvingReviewers |
             [
@@ -1454,22 +2011,25 @@ object GhClient {
                 ${'$'}checksPending,
                 ${'$'}requestedReviewers,
                 ${'$'}changeRequestReviewers,
-                ${'$'}approvingReviewers
+                ${'$'}approvingReviewers,
+                ${'$'}assignees
             ] | @tsv
         """.trimIndent().replace("\n", " ")
 
         args += listOf(
             "--json",
-            "number,title,url,updatedAt,comments,author,isDraft,reviewDecision,mergeable,mergeStateStatus,reviewRequests,latestReviews,statusCheckRollup",
+            "number,title,url,updatedAt,comments,author,isDraft,reviewDecision,mergeable,mergeStateStatus,reviewRequests,latestReviews,statusCheckRollup,assignees",
             "--jq",
             jqExpression,
         )
 
         val output = runGh(*args.toTypedArray())
         return output.lines().mapNotNull { line ->
-            val parts = line.split("\t", limit = 17)
+            val parts = line.split("\t", limit = 18)
             if (parts.size < 6) return@mapNotNull null
 
+            val requestedReviewers = deserializeIdentityList(parts.getOrNull(14))
+            val assignees = deserializeIdentityList(parts.getOrNull(17))
             PullRequest(
                 repository = repoId,
                 number = parts[0].toIntOrNull() ?: return@mapNotNull null,
@@ -1478,6 +2038,11 @@ object GhClient {
                 updatedAt = parts[3].unescapeTsv().ifBlank { null },
                 comments = parts.getOrNull(4)?.toIntOrNull() ?: 0,
                 source = source,
+                reviewRequestKind = if (source == PullRequestSource.ReviewRequest) {
+                    classifyReviewRequest(viewerLogin, requestedReviewers, assignees)
+                } else {
+                    null
+                },
                 authorLogin = parts.getOrNull(5)?.unescapeTsv()?.ifBlank { null },
                 isDraft = parts.getOrNull(6)?.toBooleanStrictOrNull() ?: false,
                 reviewDecision = parts.getOrNull(7)?.unescapeTsv()?.ifBlank { null },
@@ -1487,7 +2052,7 @@ object GhClient {
                 checksTotal = parts.getOrNull(11)?.toIntOrNull() ?: 0,
                 checksFailing = parts.getOrNull(12)?.toIntOrNull() ?: 0,
                 checksPending = parts.getOrNull(13)?.toIntOrNull() ?: 0,
-                requestedReviewers = deserializeIdentityList(parts.getOrNull(14)),
+                requestedReviewers = requestedReviewers,
                 changeRequestReviewers = deserializeIdentityList(parts.getOrNull(15)),
                 approvingReviewers = deserializeIdentityList(parts.getOrNull(16)),
             )
@@ -1820,9 +2385,17 @@ object GhClient {
 @Composable
 fun RevqApp(state: AppState) {
     val keyboardRouter = remember { KeyboardRouter() }
-    val commandExecutor = remember(state) { CommandExecutor(state) }
     val paletteState = remember { CommandPaletteState() }
     val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val rootFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(density.density, density.fontScale) {
+        state.displayDiagnostics = buildDisplayDiagnostics(
+            composeDensity = density.density,
+            fontScale = density.fontScale,
+        )
+    }
 
     fun executeKeyboardAction(action: KeyboardAction): Boolean {
         when (action) {
@@ -1859,6 +2432,8 @@ fun RevqApp(state: AppState) {
             KeyboardAction.LastItem -> moveToRegionBoundary(state, first = false)
             KeyboardAction.HalfPageDown -> moveByHalfPage(state, 1)
             KeyboardAction.HalfPageUp -> moveByHalfPage(state, -1)
+            KeyboardAction.PageDown -> moveByHalfPage(state, 1)
+            KeyboardAction.PageUp -> moveByHalfPage(state, -1)
             KeyboardAction.Activate -> {
                 if (state.view == View.Settings) {
                     activateFocusedSettingsRow(state)
@@ -1885,10 +2460,13 @@ fun RevqApp(state: AppState) {
             }
 
             KeyboardAction.OpenPalette -> paletteState.open()
-            KeyboardAction.CloseCommandPalette -> paletteState.close()
+            KeyboardAction.CloseCommandPalette -> {
+                paletteState.close()
+                rootFocusRequester.requestFocus()
+            }
 
             is KeyboardAction.ExecuteCommand -> {
-                commandExecutor.execute(action.commandId)
+                CommandRegistry.execute(action.commandId, state)
             }
         }
         return true
@@ -1897,6 +2475,8 @@ fun RevqApp(state: AppState) {
     Surface(
         modifier = Modifier
             .fillMaxSize()
+            .focusRequester(rootFocusRequester)
+            .focusable()
             .onPreviewKeyEvent { event ->
                 val action = keyboardRouter.route(
                     event = event,
@@ -1919,7 +2499,12 @@ fun RevqApp(state: AppState) {
                             .fillMaxHeight()
                             .keyboardRegionFrame(state.keyboardFocusRegion == FocusRegion.Sidebar),
                     ) {
-                        SidebarPanel(state = state)
+                        SidebarPanel(
+                            state = state,
+                            onOpenRepositoryScope = {
+                                paletteState.open(PaletteMode.RepositoryScope)
+                            },
+                        )
                     }
                     Divider(
                         Modifier.fillMaxHeight().width(1.dp),
@@ -1947,25 +2532,6 @@ fun RevqApp(state: AppState) {
                         ) {
                             MainPane(state, Modifier.fillMaxSize())
                         }
-                        AnimatedVisibility(visible = state.selectedPullRequest != null) {
-                            Row {
-                                Divider(
-                                    Modifier.fillMaxHeight().width(1.dp),
-                                    color = if (state.keyboardFocusRegion == FocusRegion.ReviewBrief) {
-                                        Olive.copy(alpha = 0.55f)
-                                    } else {
-                                        Border
-                                    },
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .keyboardRegionFrame(state.keyboardFocusRegion == FocusRegion.ReviewBrief),
-                                ) {
-                                    ReviewBriefPanel(state)
-                                }
-                            }
-                        }
                     }
                 }
                 BottomStatusBar(state, paletteState)
@@ -1978,7 +2544,39 @@ fun RevqApp(state: AppState) {
                     onGoToTop = { moveToRegionBoundary(state, first = true) },
                 )
             }
+
+            AnimatedVisibility(
+                visible = state.sidebarNavigationHintVisible,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 300.dp, bottom = 58.dp),
+            ) {
+                Surface(
+                    color = PanelElevated,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, Border),
+                ) {
+                    Text(
+                        text = "Sidebar · j/k move · Enter open · l return",
+                        color = TextPrimary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
+
+            if (state.showAboutDialog) {
+                AboutRevqDialog(
+                    state = state,
+                    onDismiss = { state.showAboutDialog = false },
+                )
+            }
         }
+    }
+
+    LaunchedEffect(state.mainWindowFocusRequest) {
+        delay(50)
+        rootFocusRequester.requestFocus()
     }
 
     LaunchedEffect(state.searchQuery, state.view) {
@@ -1988,14 +2586,6 @@ fun RevqApp(state: AppState) {
         }
     }
 
-    LaunchedEffect(state.selectedPullRequest) {
-        if (
-            state.selectedPullRequest == null &&
-            state.keyboardFocusRegion == FocusRegion.ReviewBrief
-        ) {
-            state.keyboardFocusRegion = FocusRegion.PullRequestList
-        }
-    }
 }
 
 private fun Modifier.keyboardRegionFrame(active: Boolean): Modifier =
@@ -2044,9 +2634,9 @@ fun MainPane(state: AppState, modifier: Modifier = Modifier) {
             Divider(color = Border)
         }
 
-        // Keep the cached/current queue usable during background refreshes.
-        // Skeletons are only useful before RevQ has anything meaningful to show.
-        if (state.isRefreshing && state.pullRequests.isEmpty()) {
+        // Refresh is an intentional visual reset of the queue. Keep the skeleton
+        // visible for every refresh so manual and scheduled refreshes feel consistent.
+        if (state.isRefreshing) {
             SkeletonList()
         } else {
             PullRequestList(state)
@@ -2059,8 +2649,8 @@ fun MainToolbar(state: AppState) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(96.dp)
-            .background(if (state.reviewSessionActive) Color(0xFF1E241A) else PanelBg)
+            .height(76.dp)
+            .background(PanelBg)
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2069,81 +2659,20 @@ fun MainToolbar(state: AppState) {
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    text = if (state.reviewSessionActive) "Review session" else state.view.label,
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleLarge,
-                )
-
-                if (state.focusReviewMode && !state.reviewSessionActive) {
-                    Pill("Focus", OliveSoft, Olive)
-                }
-
-                reviewSessionProgressPillLabel(state)?.let { progress ->
-                    Pill(progress, OliveSoft, Olive)
-                }
-            }
+            Text(
+                text = state.view.label,
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+            )
 
             Text(
-                text = if (state.reviewSessionActive) {
-                    sessionProgressLine(state)
-                } else {
-                    mainToolbarSubtitle(state)
-                },
+                text = mainToolbarSubtitle(state),
                 color = TextMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
             )
-        }
-
-        if (
-            state.view == View.NeedsReview &&
-            !state.reviewSessionActive &&
-            state.reviewQueue().isNotEmpty()
-        ) {
-            Button(
-                onClick = { state.startReviewing() },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Olive,
-                    contentColor = Color(0xFF151812),
-                ),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(7.dp))
-                Text("Start review session")
-            }
-        }
-
-        if (state.reviewSessionActive) {
-            Button(
-                onClick = { state.previousReview() },
-                enabled = canGoPrevious(state),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PanelElevated,
-                    contentColor = TextPrimary,
-                    disabledContainerColor = PanelElevated.copy(alpha = 0.45f),
-                    disabledContentColor = TextMuted.copy(alpha = 0.55f),
-                ),
-                border = BorderStroke(1.dp, Border),
-            ) {
-                Text("←")
-                Spacer(Modifier.width(6.dp))
-                Text("Previous")
-            }
-
-            TextButton(onClick = { state.endReviewSession() }) {
-                Text("End session", color = TextMuted)
-            }
         }
 
         RefreshAction(state)
@@ -2271,7 +2800,7 @@ fun WorkspaceControls(state: AppState) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp, vertical = 12.dp),
+            .padding(horizontal = 22.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -2456,17 +2985,30 @@ fun RefreshErrorBanner(state: AppState) {
 fun PullRequestList(state: AppState) {
     val prs = state.visiblePullRequests()
 
-    if (state.reviewSessionActive && state.reviewQueue().isEmpty()) {
-        SessionCompleteState(state)
-        return
-    }
-
     if (prs.isEmpty()) {
         EmptyState(state)
         return
     }
 
-    val listState = rememberLazyListState()
+    val currentView = state.view
+    val savedViewport = state.queueViewportState(currentView)
+    val listState = remember(currentView) {
+        LazyListState(
+            firstVisibleItemIndex = savedViewport?.firstVisibleItemIndex ?: 0,
+            firstVisibleItemScrollOffset = savedViewport?.firstVisibleItemScrollOffset ?: 0,
+        )
+    }
+
+    DisposableEffect(currentView, listState) {
+        onDispose {
+            state.rememberQueueViewport(
+                view = currentView,
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+            )
+        }
+    }
+
     val selected = state.selectedPullRequest
     val visibleLazyItemCount = listState.layoutInfo.visibleItemsInfo.size
 
@@ -2523,6 +3065,8 @@ fun PullRequestList(state: AppState) {
             val visibleIndices = listState.layoutInfo.visibleItemsInfo
                 .map { it.index }
 
+            // Preserve spatial context. Expanding an already visible PR should not
+            // suddenly jump it to the top of the viewport.
             if (selectedLazyIndex !in visibleIndices) {
                 listState.animateScrollToItem(selectedLazyIndex)
             }
@@ -2557,14 +3101,10 @@ fun PullRequestList(state: AppState) {
 
             state.view == View.NeedsReview -> {
                 section(
-                    title = if (state.reviewSessionActive) {
-                        "SESSION QUEUE"
-                    } else {
-                        "UP NEXT"
-                    },
+                    title = "REVIEW QUEUE",
                     prs = prs,
                     state = state,
-                    markFirst = !state.reviewSessionActive,
+                    markFirst = state.sortMode == "Urgency" && !state.groupByRepository,
                 )
             }
 
@@ -2686,130 +3226,187 @@ fun PullRequestRow(
 ) {
     val selected = state.selectedPullRequest?.key == pr.key &&
             state.selectedPullRequest?.source == pr.source
+    val expanded = state.expandedPullRequestKey == pr.key
 
     val presentation = rowPresentation(state, pr, startHere)
     val rowPadding = if (state.compactRows) 10.dp else 14.dp
     val avatarSize = if (state.compactRows) 34.dp else 40.dp
     val railHeight = if (state.compactRows) 46.dp else 56.dp
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                if (selected) Color(0xFF23282E) else PanelBg,
-            )
-            .clickable {
-                state.keyboardMode = KeyboardMode.Normal
-                state.keyboardFocusRegion = FocusRegion.PullRequestList
-                state.selectedPullRequest = pr
-            }
-            .padding(horizontal = 22.dp, vertical = rowPadding),
-        verticalAlignment = Alignment.Top,
+            .background(if (selected || expanded) Color(0xFF23282E) else PanelBg),
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .width(3.dp)
-                .height(railHeight)
-                .clip(RoundedCornerShape(999.dp))
-                .background(presentation.color.copy(alpha = if (selected || startHere || presentation.strong) 1f else 0.48f)),
-        )
-
-        Spacer(Modifier.width(11.dp))
-
-        Box(
-            modifier = Modifier
-                .size(avatarSize)
-                .clip(RoundedCornerShape(11.dp))
-                .background(Color(0xFF2B3036))
-                .border(
-                    width = 1.dp,
-                    color = Border,
-                    shape = RoundedCornerShape(11.dp),
-                ),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .background(Color.Transparent)
+                .clickable {
+                    state.keyboardMode = KeyboardMode.Normal
+                    state.keyboardFocusRegion = FocusRegion.PullRequestList
+                    state.togglePullRequestDetails(pr)
+                }
+                .padding(horizontal = 22.dp, vertical = rowPadding),
+            verticalAlignment = Alignment.Top,
         ) {
-            Text(
-                text = repoMonogram(pr),
-                color = if (selected) TextPrimary else TextMuted,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(railHeight)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(presentation.color.copy(alpha = if (selected || startHere || presentation.strong) 1f else 0.48f)),
             )
-        }
 
-        Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(11.dp))
 
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(
-                if (state.compactRows) 3.dp else 5.dp,
-            ),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(avatarSize)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(Color(0xFF2B3036))
+                    .border(
+                        width = 1.dp,
+                        color = Border,
+                        shape = RoundedCornerShape(11.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = repoMonogram(pr),
+                    color = if (selected) TextPrimary else TextMuted,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (state.compactRows) 3.dp else 5.dp,
+                ),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = pr.repository.toString(),
+                        color = TextMuted,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+
+                    if (state.isPinned(pr)) {
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.Rounded.Star,
+                            contentDescription = "Pinned",
+                            tint = InfoBlue,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+
+                    Spacer(Modifier.width(10.dp))
+
+                    Text(
+                        text = if (selected) {
+                            selectedQueuePosition(state)
+                                ?.let { "${it.current} of ${it.total} · ${compactCiLabel(pr)}" }
+                                ?: compactCiLabel(pr)
+                        } else {
+                            rowUpdatedPrefix(pr)
+                        },
+                        color = when {
+                            pr.checksFailing > 0 -> Rose
+                            isStale(pr.updatedAt) -> Amber
+                            else -> TextMuted
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.width(if (selected) 150.dp else 132.dp),
+                    )
+
+                    Spacer(Modifier.width(6.dp))
+
+                    Text(
+                        text = if (expanded) "⌄" else "›",
+                        color = if (selected || expanded) Olive else TextMuted,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+
                 Text(
                     text = pr.title,
                     color = TextPrimary,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = if (selected && !state.compactRows) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
 
-                if (state.isPinned(pr)) {
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.Rounded.Star,
-                        contentDescription = "Pinned",
-                        tint = InfoBlue,
-                        modifier = Modifier.size(16.dp),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    queueChangeMarker(state, pr)?.let { marker ->
+                        Text(
+                            text = marker.label,
+                            color = marker.color,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+
+                    Text(
+                        text = queueRowMetadata(pr, selected),
+                        color = if (presentation.strong) {
+                            TextPrimary
+                        } else {
+                            TextMuted
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
+
                 }
-
-                Spacer(Modifier.width(10.dp))
-
-                Text(
-                    text = rowUpdatedPrefix(pr),
-                    color = if (isStale(pr.updatedAt)) Amber else TextMuted,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(104.dp),
-                )
-            }
-
-            Text(
-                text = rowMetadata(pr),
-                color = TextMuted,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                Text(
-                    text = presentation.text,
-                    color = if (presentation.strong) {
-                        TextPrimary
-                    } else {
-                        TextMuted
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-
-                PullRequestReasonChip(pullRequestReasonLabel(state, pr, startHere))
             }
         }
-    }
 
-    Divider(
-        modifier = Modifier.padding(start = 76.dp),
-        color = Border,
-    )
+        AnimatedVisibility(visible = state.expandedPullRequestKey == pr.key) {
+            InlineReviewBrief(state = state, pr = pr)
+        }
+
+        Divider(
+            modifier = Modifier.padding(start = if (expanded) 22.dp else 76.dp),
+            color = Border,
+        )
+    }
+}
+
+private data class QueueChangeMarker(
+    val label: String,
+    val color: Color,
+)
+
+private fun queueChangeMarker(
+    state: AppState,
+    pr: PullRequest,
+): QueueChangeMarker? = when {
+    pr.key in state.newPullRequestKeys -> QueueChangeMarker("NEW", Olive)
+    pr.key in state.updatedPullRequestKeys -> QueueChangeMarker("UPDATED", Amber)
+    else -> null
+}
+
+private fun compactCiLabel(pr: PullRequest): String = when {
+    pr.checksFailing > 0 -> "CI ✕ ${pr.checksFailing}"
+    pr.checksPending > 0 -> "CI … ${pr.checksPending}"
+    pr.checksTotal > 0 -> "CI ✓"
+    else -> staleOrRelativeLabel(pr.updatedAt)
 }
 
 private data class RowPresentation(
@@ -2923,25 +3520,20 @@ fun workspaceFilterChips(state: AppState): List<WorkspaceFilterChip> = buildList
         .takeIf { it.isNotBlank() }
         ?.let { add(WorkspaceFilterChip("Filter", it, clearable = true)) }
 
-    if (state.focusReviewMode) {
-        add(WorkspaceFilterChip("Focus", "Needs Review", clearable = false))
+    if (state.sortMode != "Urgency") {
+        add(WorkspaceFilterChip("Sort", state.sortMode, clearable = false))
     }
-}
 
-data class SelectedPullRequestActionHint(
-    val key: String,
-    val label: String,
-)
+    if (state.groupByRepository) {
+        add(WorkspaceFilterChip("Group", "Repository", clearable = false))
+    }
 
-fun selectedPullRequestActionHints(state: AppState): List<SelectedPullRequestActionHint> {
-    val selected = state.selectedPullRequest ?: return emptyList()
-    return buildList {
-        add(SelectedPullRequestActionHint("o", "Open"))
-        add(SelectedPullRequestActionHint("p", if (state.isPinned(selected)) "Unpin" else "Pin"))
-        if (selected.source == PullRequestSource.ReviewRequest && !state.isHandledCurrent(selected)) {
-            add(SelectedPullRequestActionHint("m", "Reviewed"))
-        }
-        add(SelectedPullRequestActionHint("c", "Copy"))
+    when (val scope = state.currentQueueScopeFilter()) {
+        QueueScopeFilter.All -> Unit
+        is QueueScopeFilter.Organization ->
+            add(WorkspaceFilterChip("Organization", scope.owner, clearable = true))
+        is QueueScopeFilter.Repository ->
+            add(WorkspaceFilterChip("Repository", scope.nameWithOwner, clearable = true))
     }
 }
 
@@ -2952,7 +3544,7 @@ data class SetupChecklistItem(
 
 fun setupChecklistItems(state: AppState): List<SetupChecklistItem> = listOf(
     SetupChecklistItem("GitHub CLI", state.ghPathText.isNotBlank() || state.ghDetectionSource != "Not detected"),
-    SetupChecklistItem("Tracked repos or orgs", parseLines(state.repositoriesText).isNotEmpty() || parseLines(state.organizationsText).isNotEmpty()),
+    SetupChecklistItem("Tracked repositories", parseLines(state.repositoriesText).isNotEmpty()),
     SetupChecklistItem("Refresh", state.lastRefreshFinishedAt != null || state.pullRequests.isNotEmpty()),
 )
 
@@ -2968,11 +3560,14 @@ private fun mainToolbarSubtitle(state: AppState): String {
                     staleOrRelativeLabel(it.updatedAt)
                 }
 
+            val staleCount = queue.count { isStale(it.updatedAt) }
+            val failingCount = queue.count { it.checksFailing > 0 }
+
             buildString {
                 append("${queue.size} waiting")
-                if (oldest != null) {
-                    append(" · oldest $oldest")
-                }
+                if (staleCount > 0) append(" · $staleCount stale")
+                if (failingCount > 0) append(" · $failingCount CI failing")
+                if (oldest != null) append(" · oldest $oldest")
             }
         }
 
@@ -3030,52 +3625,60 @@ fun BottomStatusBar(
     state: AppState,
     paletteState: CommandPaletteState,
 ) {
+    val feedback = state.actionFeedback
+    LaunchedEffect(feedback?.sequence) {
+        if (feedback != null) {
+            delay(2_500)
+            if (state.actionFeedback?.sequence == feedback.sequence) {
+                state.actionFeedback = null
+            }
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(44.dp)
             .background(Color(0xFF0E1012))
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (state.lastUndoReview != null) {
-            Text(
-                text = "Marked reviewed.",
-                color = TextMuted,
-                style = MaterialTheme.typography.bodySmall,
-            )
+        val leftText = when {
+            feedback != null -> feedback.message
+            state.lastUndoReview != null -> "Marked reviewed · Undo available"
+            state.isRefreshing -> refreshProgressLine(state)
+            state.lastRefreshError != null -> "Refresh failed"
+            state.refreshDelta != null -> "Refreshed · ${state.refreshDelta!!.summaryText()}"
+            state.selectedPullRequest != null -> {
+                val pr = state.selectedPullRequest!!
+                "${pr.repository} #${pr.number}"
+            }
+            state.lastRefreshFinishedAt != null ->
+                "Ready · ${state.reviewQueue().size} reviews waiting"
+            else -> state.statusLine
+        }
 
+        Text(
+            text = leftText,
+            color = when {
+                feedback != null -> Olive
+                state.lastRefreshError != null -> Rose
+                else -> TextMuted
+            },
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+
+        if (state.lastUndoReview != null && feedback == null) {
             TextButton(onClick = { state.undoMarkReviewed() }) {
                 Text("Undo", color = Olive)
             }
-        } else {
-            val status = when {
-                state.isRefreshing -> refreshProgressLine(state)
-                state.lastRefreshError != null -> "Refresh failed"
-                state.lastRefreshFinishedAt != null -> {
-                    "Ready · ${state.reviewQueue().size} reviews waiting"
-                }
-                else -> state.statusLine
-            }
-
-            Text(
-                text = status,
-                color = if (state.lastRefreshError != null) Rose else TextMuted,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            Spacer(Modifier.width(8.dp))
         }
 
-        Spacer(Modifier.width(12.dp))
-        SelectedPullRequestActionStrip(state)
-        Spacer(Modifier.width(10.dp))
-        ActiveFocusChip(activeKeyboardRegionLabel(state, paletteState.isOpen))
-        Spacer(Modifier.width(10.dp))
-        NextKeyboardActionHint(state)
-        Spacer(Modifier.width(10.dp))
-        KeyboardContextHints(state, paletteState)
+        NavigationFooterHints(state)
         Spacer(Modifier.width(10.dp))
 
         TextButton(onClick = { paletteState.open() }) {
@@ -3086,38 +3689,47 @@ fun BottomStatusBar(
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(6.dp))
-            Text("Space More", color = TextMuted)
+            Text("Space Commands", color = TextMuted)
         }
     }
 }
 
 @Composable
-private fun SelectedPullRequestActionStrip(state: AppState) {
-    val hints = selectedPullRequestActionHints(state)
-    if (hints.isEmpty()) return
+private fun NavigationFooterHints(state: AppState) {
+    val hints = if (state.view == View.Settings) {
+        listOf(
+            "j/k" to "Move",
+            "h/l" to "Sections",
+            "Enter" to "Activate",
+            "Esc" to "Exit",
+        )
+    } else {
+        listOf(
+            "j/k" to "Move",
+            "h/l" to "Panes",
+            "Enter" to "Inspect",
+            "Home/End" to "Ends",
+            "Esc" to "Back",
+        )
+    }
 
     Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFF15181C))
-            .border(1.dp, Border, RoundedCornerShape(999.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        hints.forEach { hint ->
+        hints.forEach { (key, label) ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = hint.key,
-                    color = Olive,
+                    text = key,
+                    color = TextPrimary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = hint.label,
+                    text = label,
                     color = TextMuted,
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -3127,114 +3739,109 @@ private fun SelectedPullRequestActionStrip(state: AppState) {
 }
 
 @Composable
-private fun ActiveFocusChip(label: String) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFF15181C))
-            .border(1.dp, Olive.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 9.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text = "Focus",
-            color = Olive,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = label,
-            color = TextPrimary,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun NextKeyboardActionHint(state: AppState) {
-    val action = nextKeyboardAction(state) ?: return
-
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(OliveSoft)
-            .border(1.dp, Olive.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 9.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text = action.key,
-            color = Olive,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = action.label,
-            color = TextPrimary,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun KeyboardContextHints(
+private fun AboutRevqDialog(
     state: AppState,
-    paletteState: CommandPaletteState,
+    onDismiss: () -> Unit,
 ) {
-    val modeLabel = when {
-        paletteState.isOpen -> "PALETTE"
-        state.keyboardMode == KeyboardMode.Insert -> "INSERT"
-        else -> "NORMAL"
-    }
+    val version = (
+            System.getProperty("revq.version")
+                ?: System.getenv("REVQ_VERSION")
+            )
+        ?.takeIf { it.isNotBlank() }
+        ?: AppState::class.java.`package`?.implementationVersion
+            ?.takeIf { it.isNotBlank() }
+        ?: "Development build"
+    val repositoryUrl = (
+            System.getProperty("revq.repositoryUrl")
+                ?: System.getenv("REVQ_REPOSITORY_URL")
+            )
+        ?.takeIf { it.isNotBlank() }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            text = modeLabel,
-            color = Olive,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-        )
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.width(460.dp),
+            color = PanelBg,
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.dp, Border),
+        ) {
+            Column(
+                modifier = Modifier.padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Icon(
+                        painter = painterResource("icon-app.png"),
+                        contentDescription = null,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(54.dp),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "RevQ",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                        Text(
+                            text = "Review companion",
+                            color = TextMuted,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
 
-        compactKeyboardHints(state, paletteOpen = paletteState.isOpen).forEach { hint ->
-            ShortcutHint(hint.key, hint.label)
+                Divider(color = Border)
+
+                Row(Modifier.fillMaxWidth()) {
+                    Text("Version", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    Text(version, color = TextPrimary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                }
+
+                Text(
+                    text = "A keyboard-first companion for keeping pull request review work visible and moving.",
+                    color = TextMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        enabled = repositoryUrl != null,
+                        onClick = {
+                            repositoryUrl?.let { url ->
+                                openUrl(url.trimEnd('/') + "/releases")
+                            } ?: run {
+                                state.statusLine = "Repository URL is not configured"
+                            }
+                        },
+                    ) {
+                        Text("Check for updates", color = if (repositoryUrl != null) Olive else TextMuted)
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    TextButton(
+                        enabled = repositoryUrl != null,
+                        onClick = {
+                            repositoryUrl?.let(::openUrl) ?: run {
+                                state.statusLine = "Repository URL is not configured"
+                            }
+                        },
+                    ) {
+                        Text("Open project repository", color = if (repositoryUrl != null) Olive else TextMuted)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = onDismiss) {
+                        Text("Close")
+                    }
+                }
+            }
         }
-    }
-}
-
-@Composable
-private fun ShortcutHint(
-    key: String,
-    label: String,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = key,
-            color = TextPrimary,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .clip(RoundedCornerShape(5.dp))
-                .background(PanelElevated)
-                .border(1.dp, Border, RoundedCornerShape(5.dp))
-                .padding(horizontal = 5.dp, vertical = 2.dp),
-        )
-        Text(
-            text = label,
-            color = TextMuted,
-            style = MaterialTheme.typography.labelSmall,
-        )
     }
 }
 
@@ -3303,64 +3910,6 @@ private fun PullRequestReasonChip(label: String) {
             .border(1.dp, Border, RoundedCornerShape(999.dp))
             .padding(horizontal = 7.dp, vertical = 2.dp),
     )
-}
-
-@Composable
-fun SessionCompleteState(state: AppState) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            modifier = Modifier.widthIn(max = 520.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.CheckCircle,
-                contentDescription = null,
-                tint = ReadyGreen,
-                modifier = Modifier.size(38.dp),
-            )
-
-            Text(
-                text = "Review session complete",
-                color = TextPrimary,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleLarge,
-            )
-
-            Text(
-                text = "Nothing from this review queue is waiting on you now.",
-                color = TextMuted,
-            )
-
-            if (state.sessionHandledCount > 0) {
-                Text(
-                    text = "${state.sessionHandledCount} reviewed in this session",
-                    color = Olive,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(
-                    onClick = {
-                        state.selectView(View.Mine)
-                    },
-                ) {
-                    Text("View My Pull Requests")
-                }
-
-                TextButton(onClick = { state.endReviewSession() }) {
-                    Text("Done", color = TextMuted)
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -3538,6 +4087,38 @@ internal fun emptyStateSpec(state: AppState): EmptyStateSpec {
             detailLabel = state.searchQuery,
             primaryLabel = "Clear filter",
             primaryAction = { it.clearFilter() },
+            secondaryLabel = "Refresh",
+            secondaryAction = { it.refresh() },
+        )
+    }
+
+    if (state.currentQueueScopeFilter() != QueueScopeFilter.All) {
+        return EmptyStateSpec(
+            eyebrow = "SCOPE EMPTY",
+            title = "No PRs in this scope.",
+            subtitle = "The temporary organization or repository scope has no pull requests in ${state.view.label}.",
+            accent = Amber,
+            icon = Icons.Rounded.Search,
+            heroLabel = "Scoped queue",
+            detailLabel = "Clear the scope to see the full queue",
+            primaryLabel = "Show all scopes",
+            primaryAction = { it.clearQueueScopeFilter() },
+            secondaryLabel = "Refresh",
+            secondaryAction = { it.refresh() },
+        )
+    }
+
+    if (parseLines(state.repositoriesText).isEmpty()) {
+        return EmptyStateSpec(
+            eyebrow = "SETUP NEEDED",
+            title = "Choose repositories to track.",
+            subtitle = "Add repositories directly, or use configured organizations to discover available repositories and select the ones RevQ should track.",
+            accent = Olive,
+            icon = Icons.Rounded.FolderOpen,
+            heroLabel = "No tracked repositories",
+            detailLabel = "Organizations are discovery sources; only selected repositories are refreshed",
+            primaryLabel = "Open tracking settings",
+            primaryAction = { it.openTrackingSettings() },
             secondaryLabel = "Refresh",
             secondaryAction = { it.refresh() },
         )
@@ -3850,12 +4431,9 @@ fun Pill(label: String, color: Color, textColor: Color) {
 
 internal val SidebarKeyboardViews = listOf(
     View.NeedsReview,
+    View.Handled,
     View.Mine,
     View.Pinned,
-    View.Today,
-    View.Blocked,
-    View.Ready,
-    View.Handled,
 )
 
 private fun moveWithinFocusedRegion(
@@ -3865,7 +4443,6 @@ private fun moveWithinFocusedRegion(
     when (state.keyboardFocusRegion) {
         FocusRegion.Sidebar -> moveSidebarSelection(state, delta)
         FocusRegion.PullRequestList -> moveSelection(state, delta)
-        FocusRegion.ReviewBrief -> Unit
     }
 }
 
@@ -3887,16 +4464,12 @@ private fun moveKeyboardFocus(
                     if (state.view in SidebarKeyboardViews) {
                         state.sidebarKeyboardView = state.view
                     }
+                    state.showSidebarNavigationHintOnce()
                     FocusRegion.Sidebar
                 }
 
-                direction > 0 && state.selectedPullRequest != null -> FocusRegion.ReviewBrief
                 else -> FocusRegion.PullRequestList
             }
-        }
-
-        FocusRegion.ReviewBrief -> {
-            if (direction < 0) FocusRegion.PullRequestList else FocusRegion.ReviewBrief
         }
     }
 }
@@ -3917,11 +4490,11 @@ private fun moveToRegionBoundary(
         FocusRegion.PullRequestList -> {
             val items = state.visiblePullRequests()
             if (items.isNotEmpty()) {
+                state.expandedPullRequestKey = null
                 state.selectedPullRequest = if (first) items.first() else items.last()
             }
         }
 
-        FocusRegion.ReviewBrief -> Unit
     }
 }
 
@@ -3930,12 +4503,13 @@ private fun moveByHalfPage(
     direction: Int,
 ) {
     when (state.keyboardFocusRegion) {
-        FocusRegion.Sidebar -> moveSidebarSelection(state, direction * 3)
+        // Half-page movement only makes sense in the pull request list.
+        // The sidebar has only a few destinations and j/k already wrap through them.
+        FocusRegion.Sidebar -> Unit
         FocusRegion.PullRequestList -> moveSelection(
             state = state,
             delta = direction * max(1, state.keyboardPageStep),
         )
-        FocusRegion.ReviewBrief -> Unit
     }
 }
 
@@ -3949,19 +4523,18 @@ private fun activateFocusedRegion(state: AppState) {
                     state.selectedPullRequest = it
                 }
             } else {
-                state.keyboardFocusRegion = FocusRegion.ReviewBrief
+                state.toggleSelectedPullRequestDetails()
             }
         }
-
-        FocusRegion.ReviewBrief -> state.openSelectedInGitHub()
     }
 }
 
 private fun escapeKeyboardContext(state: AppState) {
     when (state.keyboardFocusRegion) {
-        FocusRegion.ReviewBrief -> state.keyboardFocusRegion = FocusRegion.PullRequestList
         FocusRegion.PullRequestList -> {
-            if (state.selectedPullRequest != null) {
+            if (state.expandedPullRequestKey != null) {
+                state.expandedPullRequestKey = null
+            } else if (state.selectedPullRequest != null) {
                 state.selectedPullRequest = null
             }
         }
@@ -3977,16 +4550,21 @@ private fun moveSidebarSelection(
     state: AppState,
     delta: Int,
 ) {
+    if (SidebarKeyboardViews.isEmpty()) return
+
     val currentIndex = SidebarKeyboardViews.indexOf(state.sidebarKeyboardView)
         .takeIf { it >= 0 }
         ?: SidebarKeyboardViews.indexOf(state.view).coerceAtLeast(0)
-    val nextIndex = (currentIndex + delta).coerceIn(0, SidebarKeyboardViews.lastIndex)
+
+    val size = SidebarKeyboardViews.size
+    val nextIndex = ((currentIndex + delta) % size + size) % size
     state.sidebarKeyboardView = SidebarKeyboardViews[nextIndex]
 }
 
 fun moveSelection(state: AppState, delta: Int) {
     val items = state.visiblePullRequests()
     if (items.isEmpty()) return
+    state.expandedPullRequestKey = null
     val current = state.selectedPullRequest
     val index = current?.let {
         items.indexOfFirst { pr -> pr.key == it.key && pr.source == it.source }
@@ -3998,11 +4576,51 @@ fun moveSelection(state: AppState, delta: Int) {
     state.selectedPullRequest = items[next]
 }
 
+fun buildDisplayDiagnostics(
+    composeDensity: Float,
+    fontScale: Float,
+): String {
+    val toolkitDpi = runCatching { Toolkit.getDefaultToolkit().screenResolution }.getOrNull()
+    val screen = runCatching { Toolkit.getDefaultToolkit().screenSize }.getOrNull()
+    val transform = runCatching {
+        java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+            .defaultScreenDevice
+            .defaultConfiguration
+            .defaultTransform
+    }.getOrNull()
+    val session = System.getenv("XDG_SESSION_TYPE")
+        ?: if (System.getenv("WAYLAND_DISPLAY") != null) "wayland" else "unknown"
+
+    return buildString {
+        append("display: Compose density ${"%.2f".format(composeDensity)}x")
+        append(", font scale ${"%.2f".format(fontScale)}x")
+        append(", toolkit DPI ${toolkitDpi ?: "unavailable"}")
+        append(", graphics ${transform?.scaleX?.let { "%.2f".format(it) } ?: "unavailable"}x")
+        append(", screen ${screen?.let { "${it.width}x${it.height}" } ?: "unavailable"}")
+        append(", session $session")
+    }
+}
+
 
 fun installBestEffortTray(state: AppState) {
     runCatching {
-        if (!SystemTray.isSupported()) {
+        System.err.println("RevQ tray: checking platform support")
+        val awtSupported = SystemTray.isSupported()
+        val backend = selectTrayBackend(
+            desktop = System.getenv("XDG_CURRENT_DESKTOP"),
+            sessionType = System.getenv("XDG_SESSION_TYPE"),
+            statusNotifierAvailable = statusNotifierWatcherAvailable(),
+            awtTraySupported = awtSupported,
+        )
+        if (backend == TrayBackend.StatusNotifier && StatusNotifierTray.install(state)) {
+            System.err.println("RevQ tray: StatusNotifierItem installed")
+            state.trayAvailable = true
+            state.statusLine = "RevQ tray installed"
+            return
+        }
+        if (!awtSupported) {
             state.trayAvailable = false
+            System.err.println("RevQ tray: unsupported by this desktop session")
             return
         }
         val tray = SystemTray.getSystemTray()
@@ -4011,6 +4629,7 @@ fun installBestEffortTray(state: AppState) {
             return
         }
         val image = loadRevqTrayImage()
+        System.err.println("RevQ tray: icon loaded")
         val popup = PopupMenu()
         popup.add(MenuItem("Show RevQ").apply {
             addActionListener {
@@ -4028,41 +4647,99 @@ fun installBestEffortTray(state: AppState) {
                 }
             }
         })
-        popup.add(MenuItem("Start reviewing").apply {
+        popup.add(MenuItem("Open Needs Review").apply {
             addActionListener {
                 EventQueue.invokeLater {
                     state.mainWindowVisible = true
-                    state.startReviewing()
+                    state.selectView(View.NeedsReview)
                 }
             }
         })
         popup.addSeparator()
         popup.add(MenuItem("Quit").apply { addActionListener { exitProcess(0) } })
-        tray.add(TrayIcon(image, "RevQ", popup).apply { isImageAutoSize = true })
+        val trayIcon = TrayIcon(image, "RevQ", popup).apply {
+            isImageAutoSize = true
+            addActionListener {
+                EventQueue.invokeLater {
+                    state.mainWindowVisible = true
+                    state.selectView(View.NeedsReview)
+                }
+            }
+        }
+        tray.add(trayIcon)
+        System.err.println("RevQ tray: menu and click handlers installed")
         state.trayAvailable = true
         state.statusLine = "RevQ tray installed"
     }.onFailure {
+        System.err.println("RevQ tray: initialization failed: ${it.message}")
         state.trayAvailable = false
         state.statusLine = "Tray unavailable on this desktop session"
     }
 }
 
 private fun loadRevqTrayImage(): java.awt.Image {
-    val resource = Thread.currentThread().contextClassLoader.getResource("icon.png")
-    val image = when {
-        resource != null -> ImageIO.read(resource)
-        File("icon.png").exists() -> ImageIO.read(File("icon.png"))
-        else -> null
-    }
-    if (image != null) return image
-
-    val fallback = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
-    val g = fallback.createGraphics()
-    g.color = java.awt.Color(167, 196, 106)
-    g.fillOval(2, 2, 12, 12)
-    g.dispose()
-    return fallback
+    val osName = System.getProperty("os.name").lowercase()
+    val isMac = osName.contains("mac")
+    return awtTrayImage(if (isMac) 18 else 22)
 }
+
+fun trayIconResourceName(darkAppearance: Boolean): String =
+    PlatformPresence.trayIconResourceName(darkAppearance)
+
+enum class TrayBackend {
+    StatusNotifier,
+    Awt,
+    None,
+}
+
+fun selectTrayBackend(
+    desktop: String?,
+    sessionType: String?,
+    statusNotifierAvailable: Boolean,
+    awtTraySupported: Boolean,
+): TrayBackend = PlatformPresence.selectTrayBackend(
+    desktop = desktop,
+    sessionType = sessionType,
+    statusNotifierAvailable = statusNotifierAvailable,
+    awtTraySupported = awtTraySupported,
+)
+
+private fun statusNotifierWatcherAvailable(): Boolean = runCatching {
+    val process = ProcessBuilder(
+        "gdbus",
+        "call",
+        "--session",
+        "--dest", "org.freedesktop.DBus",
+        "--object-path", "/org/freedesktop/DBus",
+        "--method", "org.freedesktop.DBus.NameHasOwner",
+        "org.kde.StatusNotifierWatcher",
+    )
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText()
+    val finished = process.waitFor(2, TimeUnit.SECONDS)
+    if (!finished) process.destroyForcibly()
+    finished && output.contains("true")
+}.getOrDefault(false)
+
+fun desktopUsesDarkAppearance(): Boolean = runCatching {
+    val process = ProcessBuilder(
+        "gdbus",
+        "call",
+        "--session",
+        "--dest", "org.freedesktop.portal.Desktop",
+        "--object-path", "/org/freedesktop/portal/desktop",
+        "--method", "org.freedesktop.portal.Settings.Read",
+        "org.freedesktop.appearance",
+        "color-scheme",
+    )
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText()
+    val finished = process.waitFor(2, TimeUnit.SECONDS)
+    if (!finished) process.destroyForcibly()
+    finished && Regex("""uint32\s+1""").containsMatchIn(output)
+}.getOrDefault(true)
 
 
 fun dedupePullRequests(prs: List<PullRequest>): List<PullRequest> {
@@ -4100,6 +4777,7 @@ fun serializePullRequest(pr: PullRequest): String = listOf(
     serializeIdentityList(pr.changeRequestReviewers),
     serializeIdentityList(pr.approvingReviewers),
     serializeIdentityList(pr.unresolvedDiscussionAuthors),
+    pr.reviewRequestKind?.name.orEmpty(),
 ).joinToString("\t")
 
 fun deserializePullRequest(line: String): PullRequest? {
@@ -4135,6 +4813,9 @@ fun deserializePullRequest(line: String): PullRequest? {
         changeRequestReviewers = deserializeIdentityList(parts.getOrNull(19)),
         approvingReviewers = deserializeIdentityList(parts.getOrNull(20)),
         unresolvedDiscussionAuthors = deserializeIdentityList(parts.getOrNull(21)),
+        reviewRequestKind = parts.getOrNull(22)
+            ?.takeIf(String::isNotBlank)
+            ?.let { runCatching { ReviewRequestKind.valueOf(it) }.getOrNull() },
     )
 }
 
@@ -4203,79 +4884,14 @@ fun sortForView(view: View, prs: List<PullRequest>): List<PullRequest> = when (v
     else -> prs.sortedByDescending { instantOrNull(it.updatedAt) ?: Instant.EPOCH }
 }
 
-fun ownPullRequestSignals(pr: PullRequest): List<OwnPullRequestStatus> {
-    if (pr.source != PullRequestSource.Mine) return emptyList()
-
-    val signals = mutableListOf<OwnPullRequestStatus>()
-
-    if (pr.isDraft) {
-        signals += OwnPullRequestStatus.Draft
-    }
-
-    if (pr.reviewDecision.equals("CHANGES_REQUESTED", ignoreCase = true)) {
-        signals += OwnPullRequestStatus.ChangesRequested
-    }
-
-    if (
-        pr.mergeable.equals("CONFLICTING", ignoreCase = true) ||
-        pr.mergeStateStatus.equals("DIRTY", ignoreCase = true)
-    ) {
-        signals += OwnPullRequestStatus.MergeConflict
-    }
-
-    if (pr.checksFailing > 0) {
-        signals += OwnPullRequestStatus.ChecksFailing
-    }
-
-    if (pr.discussionNeedsResponse) {
-        signals += OwnPullRequestStatus.DiscussionNeedsResponse
-    }
-
-    val mergeStateAllowsReady = pr.mergeStateStatus == null ||
-            pr.mergeStateStatus.uppercase() !in setOf("BLOCKED", "BEHIND", "DIRTY", "DRAFT", "UNKNOWN")
-
-    val approvedAndReady =
-        !pr.isDraft &&
-                pr.reviewDecision.equals("APPROVED", ignoreCase = true) &&
-                pr.checksFailing == 0 &&
-                pr.checksPending == 0 &&
-                pr.mergeable.equals("MERGEABLE", ignoreCase = true) &&
-                mergeStateAllowsReady
-
-    if (approvedAndReady) {
-        signals += OwnPullRequestStatus.ApprovedAndReady
-    }
-
-    val waitingForReviewer =
-        !pr.isDraft &&
-                !approvedAndReady &&
-                (
-                        pr.reviewRequestsCount > 0 ||
-                                pr.reviewDecision.equals("REVIEW_REQUIRED", ignoreCase = true)
-                        )
-
-    if (waitingForReviewer) {
-        signals += OwnPullRequestStatus.WaitingForReviewer
-    }
-
-    if (signals.isEmpty()) {
-        signals += OwnPullRequestStatus.NoActionNeeded
-    }
-
-    return signals.distinct()
-}
+fun ownPullRequestSignals(pr: PullRequest): List<OwnPullRequestStatus> =
+    PullRequestAttention.describe(pr).ownStatuses
 
 fun ownPullRequestPrimaryStatus(pr: PullRequest): OwnPullRequestStatus =
-    ownPullRequestSignals(pr).firstOrNull() ?: OwnPullRequestStatus.NoActionNeeded
+    PullRequestAttention.describe(pr).ownStatus ?: OwnPullRequestStatus.NoActionNeeded
 
-fun ownPullRequestNeedsAction(pr: PullRequest): Boolean = ownPullRequestSignals(pr).any {
-    it in setOf(
-        OwnPullRequestStatus.ChangesRequested,
-        OwnPullRequestStatus.MergeConflict,
-        OwnPullRequestStatus.ChecksFailing,
-        OwnPullRequestStatus.DiscussionNeedsResponse,
-    )
-}
+fun ownPullRequestNeedsAction(pr: PullRequest): Boolean =
+    PullRequestAttention.describe(pr).needsAction
 
 fun ownPullRequestRowStatus(
     pr: PullRequest,
@@ -4379,21 +4995,8 @@ fun colorForOwnPullRequestStatus(status: OwnPullRequestStatus): Color = when (st
     OwnPullRequestStatus.NoActionNeeded -> TextMuted
 }
 
-fun attentionKind(pr: PullRequest): AttentionKind = when {
-    pr.source == PullRequestSource.ReviewRequest -> AttentionKind.Review
-    pr.source == PullRequestSource.Mine -> when (ownPullRequestPrimaryStatus(pr)) {
-        OwnPullRequestStatus.ChangesRequested,
-        OwnPullRequestStatus.MergeConflict,
-        OwnPullRequestStatus.ChecksFailing -> AttentionKind.Blocked
-
-        OwnPullRequestStatus.DiscussionNeedsResponse -> AttentionKind.Action
-        OwnPullRequestStatus.ApprovedAndReady -> AttentionKind.Ready
-        OwnPullRequestStatus.Draft,
-        OwnPullRequestStatus.WaitingForReviewer,
-        OwnPullRequestStatus.NoActionNeeded -> AttentionKind.Quiet
-    }
-    else -> AttentionKind.Quiet
-}
+fun attentionKind(pr: PullRequest): AttentionKind =
+    PullRequestAttention.describe(pr).kind
 
 fun colorForKind(kind: AttentionKind): Color = when (kind) {
     AttentionKind.Review -> Olive
@@ -4461,81 +5064,6 @@ fun reviewDebtLine(state: AppState): String {
         append(" · $mine my PRs")
         if (oldest != null) append(" · oldest $oldest")
     }
-}
-
-fun sessionProgressLine(state: AppState): String {
-    val keys = state.reviewSessionQueueKeys
-    if (keys.isEmpty()) {
-        return "${state.reviewQueue().size} pull requests waiting"
-    }
-
-    val selectedKey = state.selectedPullRequest?.key
-    val index = selectedKey?.let(keys::indexOf) ?: -1
-
-    return when {
-        index >= 0 -> {
-            val remainingAfterCurrent = keys
-                .drop(index + 1)
-                .count { key ->
-                    state.reviewQueue().any { it.key == key }
-                }
-
-            buildString {
-                append("Review ${index + 1} of ${keys.size}")
-                if (state.sessionHandledCount > 0) {
-                    append(" · ${state.sessionHandledCount} reviewed")
-                }
-                append(" · $remainingAfterCurrent after this")
-            }
-        }
-
-        state.reviewQueue().isEmpty() -> {
-            "${state.sessionHandledCount} reviewed · session complete"
-        }
-
-        else -> {
-            "${state.sessionHandledCount} reviewed · ${state.reviewQueue().size} still waiting"
-        }
-    }
-}
-
-fun reviewSessionProgressPillLabel(state: AppState): String? {
-    if (!state.reviewSessionActive) return null
-
-    val keys = state.reviewSessionQueueKeys
-    if (keys.isEmpty()) {
-        val waiting = state.reviewQueue().size
-        return if (waiting == 0) "Complete" else "$waiting queued"
-    }
-
-    val selectedKey = state.selectedPullRequest?.key
-    val index = selectedKey?.let(keys::indexOf) ?: -1
-
-    return when {
-        index >= 0 -> "${index + 1}/${keys.size}"
-        state.reviewQueue().isEmpty() -> "Complete"
-        state.sessionHandledCount > 0 -> "${state.sessionHandledCount} done"
-        else -> "${state.reviewQueue().size} queued"
-    }
-}
-
-fun canGoNext(state: AppState): Boolean {
-    val reviews = state.reviewQueue()
-    val selected = state.selectedPullRequest ?: return false
-    val index = reviews.indexOfFirst { it.key == selected.key }
-
-    return if (state.reviewSessionActive) {
-        index >= 0 && reviews.size > 1
-    } else {
-        index >= 0 && index < reviews.lastIndex
-    }
-}
-
-fun canGoPrevious(state: AppState): Boolean {
-    val reviews = state.reviewQueue()
-    val selected = state.selectedPullRequest ?: return false
-    val index = reviews.indexOfFirst { it.key == selected.key }
-    return index > 0
 }
 
 fun sortHint(view: View): String = when (view) {

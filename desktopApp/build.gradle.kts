@@ -10,14 +10,65 @@ plugins {
 val appVersion = providers.gradleProperty("appVersion")
     .orElse("0.1.0")
     .get()
-val macOSPackageVersion = appVersion
+
+val supportedVersion = Regex(
+    """^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$"""
+)
+
+require(supportedVersion.matches(appVersion)) {
+    "Expected appVersion like 0.2.0 or 0.2.0-alpha.1, got '$appVersion'"
+}
+
+version = appVersion
+
+// Compose validates every configured native distribution format during project configuration.
+// Keep the shared package version acceptable to macOS/Windows, and apply Debian prerelease
+// ordering only to the DEB-specific package version.
+val packageBaseVersion = appVersion.substringBefore("-")
+
+val linuxPackageVersion =
+    appVersion.replaceFirst("-", "~")
+
+val macOSPackageVersion = packageBaseVersion
     .split(".")
     .mapIndexed { index, value ->
         val number = value.toIntOrNull()
-            ?: error("Expected numeric appVersion component, got '$appVersion'")
-        if (index == 0) number + 1 else number
+            ?: error(
+                "Expected numeric appVersion component, got '$appVersion'"
+            )
+
+        if (index == 0) {
+            number + 1
+        } else {
+            number
+        }
     }
     .joinToString(".")
+
+tasks.register("verifyReleaseVersionPolicy") {
+    group = "verification"
+    description = "Verifies per-target package version mapping for release builds."
+
+    doLast {
+        val expectedDebVersion = appVersion.replaceFirst("-", "~")
+        check(packageBaseVersion == appVersion.substringBefore("-")) {
+            "Shared package version must stay macOS/Windows-safe; got '$packageBaseVersion' for '$appVersion'."
+        }
+        check(linuxPackageVersion == expectedDebVersion) {
+            "DEB package version should be '$expectedDebVersion', got '$linuxPackageVersion'."
+        }
+        check(!packageBaseVersion.contains("-") && !packageBaseVersion.contains("~")) {
+            "Shared package version must not use prerelease separators: '$packageBaseVersion'."
+        }
+        check(!macOSPackageVersion.contains("-") && !macOSPackageVersion.contains("~")) {
+            "macOS package version must be numeric: '$macOSPackageVersion'."
+        }
+        check(!packageBaseVersion.contains("-") && !packageBaseVersion.contains("~")) {
+            "Windows package version must be numeric semver base: '$packageBaseVersion'."
+        }
+    }
+}
+
 group = "eu.revq"
 version = appVersion
 
@@ -31,6 +82,8 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(libs.compose.material3)
     implementation(compose.materialIconsExtended)
+    implementation(libs.dbus.java.core)
+    runtimeOnly(libs.dbus.java.transport.nativeUnixsocket)
     implementation(libs.kotlinx.coroutinesSwing)
 
     testImplementation(libs.kotlin.test)
@@ -44,22 +97,30 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Exe)
             packageName = "RevQ"
-            packageVersion = appVersion
+            packageVersion = packageBaseVersion
 
             linux {
-                iconFile.set(project.file("../icon.png"))
+                iconFile.set(project.file("src/main/resources/icon-app.png"))
+                debPackageVersion = linuxPackageVersion
             }
 
             macOS {
                 bundleID = "eu.revq.desktop"
                 dockName = "RevQ"
-                iconFile.set(project.file("../icon.png"))
+                iconFile.set(project.file("src/main/resources/icon-app.icns"))
                 packageVersion = macOSPackageVersion
                 packageBuildVersion = macOSPackageVersion
                 // Explicitly disable signing to prevent jpackage exit code 1 on macOS GitHub Actions runners
                 signing {
                     sign.set(false)
                 }
+            }
+
+            windows {
+                iconFile.set(project.file("src/main/resources/icon-app.ico"))
+                menuGroup = "RevQ"
+                shortcut = true
+                exePackageVersion = packageBaseVersion
             }
         }
 

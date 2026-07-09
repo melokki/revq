@@ -31,8 +31,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Expected tag like v0.1.0, got: $GITHUB_REF_NAME" >&2
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "Expected v0.2.0 or prerelease tags like v0.2.0-alpha.1, v0.2.0-beta.1, or v0.2.0-rc.1; got: $GITHUB_REF_NAME" >&2
             exit 1
           fi
 
@@ -96,8 +96,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Expected tag like v0.1.0, got: $GITHUB_REF_NAME" >&2
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "Expected v0.2.0 or prerelease tags like v0.2.0-alpha.1, v0.2.0-beta.1, or v0.2.0-rc.1; got: $GITHUB_REF_NAME" >&2
             exit 1
           fi
 
@@ -312,11 +312,20 @@ jobs:
             TITLE="$GITHUB_REF_NAME"
           fi
 
-          PRERELEASE="$(jq -r '.prerelease // false' codeberg-release.json)"
+          CODEBERG_PRERELEASE="$(jq -r '.prerelease // false' codeberg-release.json)"
+          TAG_PRERELEASE=false
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            TAG_PRERELEASE=true
+          fi
+
+          if [[ "$CODEBERG_PRERELEASE" != "$TAG_PRERELEASE" ]]; then
+            echo "::warning::Codeberg prerelease metadata ($CODEBERG_PRERELEASE) does not match tag semantics ($TAG_PRERELEASE) for $GITHUB_REF_NAME. The GitHub mirror will follow the tag."
+          fi
+
           jq -r '.body // ""' codeberg-release.json > release-notes.md
 
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$TAG_PRERELEASE" >> "$GITHUB_OUTPUT"
           {
             echo 'title<<EOF_TITLE'
             echo "$TITLE"

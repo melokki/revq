@@ -90,6 +90,10 @@ class KeyboardRouter {
         }
 
         val navigationAction = when (event.key) {
+            Key.MoveHome -> KeyboardAction.FirstItem
+            Key.MoveEnd -> KeyboardAction.LastItem
+            Key.PageDown -> KeyboardAction.PageDown
+            Key.PageUp -> KeyboardAction.PageUp
             Key.DirectionDown, Key.J -> KeyboardAction.MoveNext
             Key.DirectionUp, Key.K -> KeyboardAction.MovePrevious
             Key.DirectionLeft, Key.H -> KeyboardAction.FocusLeft

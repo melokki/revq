@@ -25,10 +25,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.AccountCircle
-import androidx.compose.material.icons.rounded.Block
-import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -37,9 +36,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.RateReview
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Today
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
@@ -58,10 +55,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,7 +77,6 @@ import eu.revq.keyboard.KeyboardMode
 private val SidebarSelectedBackground = Color(0xFF1D2227)
 private val SidebarOliveSoft = Color(0xFF2C3323)
 private val SidebarRoseSoft = Color(0xFF3B2427)
-private val SidebarReadySoft = Color(0xFF21352A)
 private val SidebarNeutralBadge = Color(0xFF2A2F36)
 private val SidebarDanger = Color(0xFFE06A6A)
 
@@ -91,12 +90,11 @@ private data class GitHubProfile(
 @Composable
 fun SidebarPanel(
     state: AppState,
+    onOpenRepositoryScope: () -> Unit,
 ) {
     var githubProfile by remember { mutableStateOf<GitHubProfile?>(null) }
     var profileLoading by remember { mutableStateOf(true) }
     var profileError by remember { mutableStateOf<String?>(null) }
-    var repositoryScope by remember { mutableStateOf<String?>(null) }
-    var searchBeforeRepositoryScope by remember { mutableStateOf("") }
 
     LaunchedEffect(state.ghPathText, state.ghTestResult) {
         profileLoading = true
@@ -111,10 +109,28 @@ fun SidebarPanel(
         profileLoading = false
     }
 
-    val repositoryOptions = state.activePullRequests()
-        .map { it.repository.toString() }
-        .distinct()
-        .sorted()
+    val currentScope = state.currentQueueScopeFilter()
+    val scopeLabel = when (currentScope) {
+        QueueScopeFilter.All -> "All repositories"
+        is QueueScopeFilter.Organization -> currentScope.owner
+        is QueueScopeFilter.Repository -> currentScope.nameWithOwner
+    }
+    val scopeIsActive = currentScope != QueueScopeFilter.All
+
+    val reviewQueue = state.reviewQueue()
+    val handledQueue = state.handledPullRequests()
+    val myPullRequests = state.activePullRequests()
+        .filter { it.source == PullRequestSource.Mine }
+    val pinnedPullRequests = state.pinnedPullRequests()
+
+    val scopedReviewCount = reviewQueue.count { it.matchesSidebarScope(currentScope) }
+    val scopedHandledCount = handledQueue.count { it.matchesSidebarScope(currentScope) }
+    val scopedMyPullRequests = myPullRequests.filter { it.matchesSidebarScope(currentScope) }
+    val scopedPinnedCount = pinnedPullRequests.count { it.matchesSidebarScope(currentScope) }
+    val scopedMyActionCount = scopedMyPullRequests.count {
+        attentionKind(it) == AttentionKind.Action ||
+                attentionKind(it) == AttentionKind.Blocked
+    }
 
     Column(
         modifier = Modifier
@@ -138,101 +154,64 @@ fun SidebarPanel(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
                 SidebarHeader()
             }
 
-            if (repositoryOptions.isNotEmpty()) {
-                item {
-                    RepositoryScopeSelector(
-                        selectedRepository = repositoryScope,
-                        repositories = repositoryOptions,
-                        onSelect = { repo ->
-                            if (repositoryScope == null && repo != null) {
-                                searchBeforeRepositoryScope = state.searchQuery
-                            }
-                            repositoryScope = repo
-                            state.searchQuery = repo ?: searchBeforeRepositoryScope
-                            state.selectedPullRequest = null
-                            state.statusLine = if (repo == null) {
-                                "Repository scope cleared"
-                            } else {
-                                "Repository scope: $repo"
-                            }
-                        },
-                        onManageRepositories = { state.selectView(View.Settings) },
+            item {
+                RepositoryScopeButton(
+                    scopeLabel = scopeLabel,
+                    scopeIsActive = scopeIsActive,
+                    onOpen = onOpenRepositoryScope,
+                    onClear = state::clearQueueScopeFilter,
+                )
+            }
+
+            item {
+                SidebarGroup(title = "Review") {
+                    SidebarItem(
+                        state = state,
+                        view = View.NeedsReview,
+                        count = reviewQueue.size,
+                        scopedCount = scopedReviewCount.takeIf { scopeIsActive },
+                        icon = Icons.Rounded.RateReview,
+                        badgeKind = SidebarBadgeKind.Review,
+                        alwaysShowCount = true,
+                        showQueueClearState = !scopeIsActive && reviewQueue.isEmpty(),
+                        showUnseenDot = state.needsReviewHasUnseenChanges,
+                    )
+
+                    SidebarItem(
+                        state = state,
+                        view = View.Handled,
+                        label = "Handled",
+                        count = handledQueue.size,
+                        scopedCount = scopedHandledCount.takeIf { scopeIsActive },
+                        icon = Icons.Rounded.DoneAll,
                     )
                 }
             }
 
             item {
-                SidebarGroup(title = "Primary") {
-                    SidebarItem(
-                        state = state,
-                        view = View.NeedsReview,
-                        count = state.reviewQueue().size,
-                        icon = Icons.Rounded.RateReview,
-                        badgeKind = SidebarBadgeKind.Review,
-                        alwaysShowCount = true,
-                    )
-
-                    val myPullRequests = state.activePullRequests()
-                        .filter { it.source == PullRequestSource.Mine }
-                    val myActionCount = myPullRequests.count {
-                        attentionKind(it) == AttentionKind.Action || attentionKind(it) == AttentionKind.Blocked
-                    }
-
+                SidebarGroup(title = "Workspace") {
                     SidebarItem(
                         state = state,
                         view = View.Mine,
                         count = myPullRequests.size,
-                        secondaryCount = myActionCount,
+                        scopedCount = scopedMyPullRequests.size.takeIf { scopeIsActive },
+                        showAttentionDot = scopedMyActionCount > 0,
                         icon = Icons.Rounded.Person,
+                        alwaysShowCount = true,
                     )
 
                     SidebarItem(
                         state = state,
                         view = View.Pinned,
-                        count = state.pinnedPullRequests().size,
+                        count = pinnedPullRequests.size,
+                        scopedCount = scopedPinnedCount.takeIf { scopeIsActive },
                         icon = Icons.Rounded.PushPin,
-                    )
-                }
-            }
-
-            item {
-                SidebarGroup(title = "Views") {
-                    SidebarItem(
-                        state = state,
-                        view = View.Today,
-                        count = state.todayPullRequests().size,
-                        icon = Icons.Rounded.Today,
-                    )
-                    SidebarItem(
-                        state = state,
-                        view = View.Blocked,
-                        count = state.activePullRequests().count {
-                            attentionKind(it) == AttentionKind.Blocked
-                        },
-                        icon = Icons.Rounded.Block,
-                        badgeKind = SidebarBadgeKind.Blocked,
-                    )
-                    SidebarItem(
-                        state = state,
-                        view = View.Ready,
-                        count = state.activePullRequests().count {
-                            attentionKind(it) == AttentionKind.Ready
-                        },
-                        icon = Icons.Rounded.CheckCircle,
-                        badgeKind = SidebarBadgeKind.Ready,
-                    )
-                    SidebarItem(
-                        state = state,
-                        view = View.Handled,
-                        label = "Reviewed",
-                        count = state.handledPullRequests().size,
-                        icon = Icons.Rounded.DoneAll,
                     )
                 }
             }
@@ -255,236 +234,126 @@ fun SidebarPanel(
 
 @Composable
 private fun SidebarHeader() {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = "RevQ",
-            color = TextPrimary,
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Text(
-            text = "Reviews first · review companion",
-            color = TextMuted,
-            style = MaterialTheme.typography.bodySmall,
-        )
+    val logo = remember { loadPackagedImage("logo.png") }
+    val headerHeight = 60.dp
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(headerHeight),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (logo != null) {
+            Image(
+                bitmap = logo,
+                contentDescription = "RevQ application icon",
+                modifier = Modifier.size(headerHeight),
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.High,
+            )
+        }
+
+        Column(
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = "RevQ",
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+            )
+            Text(
+                text = "Review companion",
+                color = TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+            )
+        }
     }
 }
 
-@Composable
-private fun RepositoryScopeSelector(
-    selectedRepository: String?,
-    repositories: List<String>,
-    onSelect: (String?) -> Unit,
-    onManageRepositories: () -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
+private fun PullRequest.matchesSidebarScope(scope: QueueScopeFilter): Boolean = when (scope) {
+    QueueScopeFilter.All -> true
+    is QueueScopeFilter.Organization -> repository.owner == scope.owner
+    is QueueScopeFilter.Repository -> repository.toString() == scope.nameWithOwner
+}
 
-    Box {
+private fun loadPackagedImage(resourceName: String): ImageBitmap? = runCatching {
+    val bytes = Thread.currentThread().contextClassLoader
+        .getResourceAsStream(resourceName)
+        ?.use { it.readBytes() }
+        ?: return null
+    SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
+}.getOrNull()
+
+@Composable
+private fun RepositoryScopeButton(
+    scopeLabel: String,
+    scopeIsActive: Boolean,
+    onOpen: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (scopeIsActive) PanelBg else Color.Transparent)
+            .border(1.dp, Border, RoundedCornerShape(9.dp))
+            .padding(start = 2.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(PanelBg)
-                .border(1.dp, Border, RoundedCornerShape(10.dp))
-                .clickable { expanded = true }
-                .padding(horizontal = 11.dp, vertical = 9.dp),
+                .weight(1f)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(7.dp))
+                .clickable(onClick = onOpen)
+                .padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(PanelElevated),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.FolderOpen,
-                    contentDescription = null,
-                    tint = if (selectedRepository == null) TextMuted else Olive,
-                    modifier = Modifier.size(17.dp),
-                )
-            }
-
-            Spacer(Modifier.width(10.dp))
-
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = "Repository scope",
-                    color = TextMuted.copy(alpha = 0.82f),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = selectedRepository ?: "All repositories",
-                    color = TextPrimary,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
             Icon(
-                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                contentDescription = if (expanded) "Close repository scope menu" else "Open repository scope menu",
+                imageVector = Icons.Rounded.FolderOpen,
+                contentDescription = null,
+                tint = if (scopeIsActive) Olive else TextMuted,
+                modifier = Modifier.size(17.dp),
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                text = scopeLabel,
+                color = TextPrimary,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = Icons.Rounded.ExpandMore,
+                contentDescription = "Choose repository scope",
                 tint = TextMuted,
                 modifier = Modifier.size(18.dp),
             )
         }
 
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier
-                .width(318.dp)
-                .background(PanelBg, RoundedCornerShape(14.dp))
-                .border(1.dp, Border, RoundedCornerShape(14.dp)),
-        ) {
-            Column(
+        if (scopeIsActive) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(PanelBg)
-                    .padding(vertical = 8.dp),
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onClear),
+                contentAlignment = Alignment.Center,
             ) {
-                RepositoryScopeMenuHeader(selectedRepository)
-                AccountMenuDivider()
-                AccountMenuSectionLabel("Scope")
-
-                RepositoryScopeMenuItem(
-                    label = "All repositories",
-                    selected = selectedRepository == null,
-                    onClick = {
-                        expanded = false
-                        onSelect(null)
-                    },
-                )
-
-                if (repositories.isNotEmpty()) {
-                    AccountMenuDivider()
-                    AccountMenuSectionLabel("Repositories")
-
-                    // DropdownMenu uses intrinsic measurement internally. LazyColumn is backed by
-                    // SubcomposeLayout and cannot answer intrinsic measurement queries, which causes
-                    // the runtime crash. A regular scrollable Column avoids SubcomposeLayout here.
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        repositories.forEach { repository ->
-                            RepositoryScopeMenuItem(
-                                label = repository,
-                                selected = repository == selectedRepository,
-                                onClick = {
-                                    expanded = false
-                                    onSelect(repository)
-                                },
-                            )
-                        }
-                    }
-                }
-
-                AccountMenuDivider()
-
-                AccountMenuAction(
-                    label = "Manage repositories",
-                    icon = Icons.Rounded.Settings,
-                    onClick = {
-                        expanded = false
-                        onManageRepositories()
-                    },
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Clear repository scope",
+                    tint = TextMuted,
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun RepositoryScopeMenuHeader(selectedRepository: String?) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(PanelElevated),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.FolderOpen,
-                contentDescription = null,
-                tint = if (selectedRepository == null) TextMuted else Olive,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-
-        Spacer(Modifier.width(11.dp))
-
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = "Repository scope",
-                color = TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = selectedRepository ?: "All repositories",
-                color = TextMuted,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun RepositoryScopeMenuItem(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (selected) SidebarSelectedBackground else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(30.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (selected) SidebarOliveSoft else PanelElevated),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = if (selected) Icons.Rounded.Check else Icons.Rounded.FolderOpen,
-                contentDescription = null,
-                tint = if (selected) Olive else TextMuted,
-                modifier = Modifier.size(17.dp),
-            )
-        }
-
-        Spacer(Modifier.width(10.dp))
-
-        Text(
-            text = label,
-            color = if (selected) TextPrimary else TextMuted,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
     }
 }
 
@@ -493,7 +362,7 @@ private fun SidebarGroup(
     title: String,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = title.uppercase(),
             color = TextMuted,
@@ -506,8 +375,6 @@ private fun SidebarGroup(
 
 private enum class SidebarBadgeKind {
     Review,
-    Blocked,
-    Ready,
     Neutral,
 }
 
@@ -518,27 +385,29 @@ private fun SidebarItem(
     count: Int?,
     icon: ImageVector,
     label: String = view.label,
-    secondaryCount: Int = 0,
+    scopedCount: Int? = null,
+    showAttentionDot: Boolean = false,
+    showUnseenDot: Boolean = false,
     badgeKind: SidebarBadgeKind = SidebarBadgeKind.Neutral,
     alwaysShowCount: Boolean = false,
+    showQueueClearState: Boolean = false,
 ) {
     val selected = state.view == view
     val keyboardCursor =
         state.keyboardMode == KeyboardMode.Normal &&
                 state.keyboardFocusRegion == FocusRegion.Sidebar &&
                 state.sidebarKeyboardView == view
-    val quietForFocus = state.focusReviewMode && view != View.NeedsReview
     val itemShape = RoundedCornerShape(10.dp)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (quietForFocus) 0.48f else 1f)
+            .alpha(1f)
             .clip(itemShape)
             .background(
                 when {
-                    keyboardCursor -> PanelElevated
                     selected -> SidebarSelectedBackground
+                    keyboardCursor -> PanelElevated
                     else -> Color.Transparent
                 },
             )
@@ -566,7 +435,11 @@ private fun SidebarItem(
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (selected) Olive else TextMuted,
+            tint = when {
+                selected -> Olive
+                keyboardCursor -> TextPrimary
+                else -> TextMuted
+            },
             modifier = Modifier.size(19.dp),
         )
 
@@ -574,7 +447,7 @@ private fun SidebarItem(
 
         Text(
             text = label,
-            color = if (selected) TextPrimary else TextMuted,
+            color = if (selected || keyboardCursor) TextPrimary else TextMuted,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
@@ -582,24 +455,94 @@ private fun SidebarItem(
             overflow = TextOverflow.Ellipsis,
         )
 
-        if (secondaryCount > 0) {
-            Text(
-                text = "•$secondaryCount",
-                color = Amber,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(Modifier.width(5.dp))
+        if (showUnseenDot) {
+            SidebarSignalDot(color = Olive, contentDescription = "New review queue activity")
+            Spacer(Modifier.width(7.dp))
         }
 
-        val shouldShowCount = count != null && (alwaysShowCount || count > 0)
-        if (shouldShowCount) {
-            SidebarCountBadge(
-                count = count,
-                kind = badgeKind,
-                emphasized = selected,
-            )
+        if (showAttentionDot) {
+            SidebarSignalDot(color = Amber, contentDescription = "Pull requests need attention")
+            Spacer(Modifier.width(7.dp))
         }
+
+        when {
+            showQueueClearState -> SidebarQueueClearMark()
+            scopedCount != null && count != null -> SidebarScopeRatio(
+                scopedCount = scopedCount,
+                totalCount = count,
+            )
+            else -> {
+                val shouldShowCount = count != null && (alwaysShowCount || count > 0)
+                if (shouldShowCount) {
+                    SidebarCountBadge(
+                        count = count,
+                        kind = badgeKind,
+                        emphasized = selected,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarSignalDot(
+    color: Color,
+    contentDescription: String,
+) {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(color)
+            .semantics { this.contentDescription = contentDescription },
+    )
+}
+
+@Composable
+private fun SidebarScopeRatio(
+    scopedCount: Int,
+    totalCount: Int,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = scopedCount.toString(),
+            color = if (scopedCount > 0) TextPrimary else TextMuted,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = "/",
+            color = TextMuted.copy(alpha = 0.62f),
+            style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+            text = totalCount.toString(),
+            color = TextMuted,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun SidebarQueueClearMark() {
+    Box(
+        modifier = Modifier
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(ReadyGreen.copy(alpha = 0.14f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Check,
+            contentDescription = "Review queue clear",
+            tint = ReadyGreen,
+            modifier = Modifier.size(15.dp),
+        )
     }
 }
 
@@ -611,15 +554,11 @@ private fun SidebarCountBadge(
 ) {
     val background = when (kind) {
         SidebarBadgeKind.Review -> SidebarOliveSoft
-        SidebarBadgeKind.Blocked -> SidebarRoseSoft
-        SidebarBadgeKind.Ready -> SidebarReadySoft
         SidebarBadgeKind.Neutral -> SidebarNeutralBadge
     }
 
     val foreground = when (kind) {
         SidebarBadgeKind.Review -> Olive
-        SidebarBadgeKind.Blocked -> SidebarDanger
-        SidebarBadgeKind.Ready -> ReadyGreen
         SidebarBadgeKind.Neutral -> if (emphasized) TextPrimary else TextMuted
     }
 
@@ -668,7 +607,10 @@ private fun GitHubAccountFooter(
 
             Spacer(Modifier.width(11.dp))
 
-            Column(Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Text(
                     text = when {
                         profile != null -> "@${profile.login}"
@@ -682,22 +624,19 @@ private fun GitHubAccountFooter(
                     overflow = TextOverflow.Ellipsis,
                 )
 
-                Text(
-                    text = when {
-                        profileError != null -> "GitHub needs attention"
-                        profile != null -> "GitHub connected"
-                        isLoading -> "Checking connection…"
-                        else -> "Not connected"
-                    },
-                    color = when {
-                        connectionNeedsAttention -> SidebarDanger
-                        profile != null -> TextMuted
-                        else -> TextMuted
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (profileError != null || isLoading || profile == null) {
+                    Text(
+                        text = when {
+                            profileError != null -> "Needs attention"
+                            isLoading -> "Checking connection…"
+                            else -> "Not connected"
+                        },
+                        color = if (connectionNeedsAttention) SidebarDanger else TextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             Icon(
@@ -730,7 +669,7 @@ private fun AccountMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
         modifier = Modifier
-            .width(318.dp)
+            .width(284.dp)
             .background(PanelBg, RoundedCornerShape(14.dp))
             .border(1.dp, Border, RoundedCornerShape(14.dp)),
     ) {
@@ -747,44 +686,12 @@ private fun AccountMenu(
 
             AccountMenuDivider()
 
-            AccountMenuSectionLabel("RevQ")
-
             AccountMenuAction(
                 label = "Settings",
                 icon = Icons.Rounded.Settings,
                 onClick = {
                     onDismissRequest()
                     state.selectView(View.Settings)
-                },
-            )
-
-            AccountMenuDivider()
-            AccountMenuSectionLabel("GitHub")
-
-            AccountMenuAction(
-                label = if (state.isRefreshing) "Refreshing…" else "Refresh now",
-                icon = Icons.Rounded.Refresh,
-                shortcut = "R",
-                enabled = !state.isRefreshing,
-                onClick = {
-                    onDismissRequest()
-                    state.refresh()
-                },
-            )
-
-            if (profileError != null) {
-                AccountMenuAttentionCard(
-                    message = profileError,
-                )
-            }
-
-            AccountMenuAction(
-                label = if (state.isTestingGh) "Testing connection…" else "Test GitHub connection",
-                icon = Icons.Rounded.CheckCircle,
-                enabled = !state.isTestingGh,
-                onClick = {
-                    onDismissRequest()
-                    state.testGithubCli()
                 },
             )
 
@@ -798,24 +705,25 @@ private fun AccountMenu(
                 },
             )
 
-            AccountMenuDivider()
-            AccountMenuSectionLabel("Support")
-
-            AccountMenuAction(
-                label = "Copy diagnostics",
-                icon = Icons.Rounded.BugReport,
-                onClick = {
-                    onDismissRequest()
-                    state.copyDiagnostics()
-                },
-            )
+            if (profileError != null) {
+                AccountMenuAttentionCard(message = profileError)
+                AccountMenuAction(
+                    label = if (state.isTestingGh) "Testing connection…" else "Test GitHub connection",
+                    icon = Icons.Rounded.CheckCircle,
+                    enabled = !state.isTestingGh,
+                    onClick = {
+                        onDismissRequest()
+                        state.testGithubCli()
+                    },
+                )
+            }
 
             AccountMenuAction(
                 label = "About RevQ",
                 icon = Icons.Rounded.Info,
                 onClick = {
                     onDismissRequest()
-                    state.statusLine = "RevQ · reviews first · review companion"
+                    state.showAboutDialog = true
                 },
             )
         }
@@ -1164,4 +1072,3 @@ private fun avatarFallback(login: String): String = login
     .take(2)
     .uppercase()
     .ifBlank { "GH" }
-

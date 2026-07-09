@@ -22,7 +22,16 @@ options:
 
 Use the run button in your IDE's editor gutter, or run tests using Gradle tasks:
 
-- Desktop tests: `./gradlew :shared:jvmTest`
+- Desktop tests: `./gradlew :desktopApp:test`
+- Shared JVM tests: `./gradlew :shared:jvmTest`
+
+### Desktop packaging notes
+
+RevQ packages platform-specific application icons (`.png` on Linux, `.icns` on
+macOS, and `.ico` on Windows) and uses dedicated monochrome tray assets at
+runtime. Linux tray availability still depends on the desktop environment
+exposing the AWT system-tray/status-notifier bridge; RevQ continues without a
+tray when that bridge is unavailable.
 
 ---
 

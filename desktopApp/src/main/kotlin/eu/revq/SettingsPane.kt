@@ -26,16 +26,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.DataObject
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DividerDefaults
+import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -50,40 +56,33 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import eu.revq.keyboard.KeyboardMode
 import java.awt.Toolkit
 
 private val SettingsNavBg = Color(0xFF171A1E)
 private val SettingsGroupBg = Color(0xFF191D22)
+private val SettingsRowHover = Color(0xFF20252B)
 private val SettingsSuccessBg = Color(0xFF1F2A22)
 private val SettingsWarningBg = Color(0xFF2B261D)
 
+
 @Composable
 fun SettingsPane(state: AppState) {
-    val selectedSection = currentSettingsSection(state)
+    val selectedSection = SettingsSection.entries
+        .getOrElse(state.settingsSectionIndex) { SettingsSection.General }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(PanelBg)
-            .onPreviewKeyEvent { handleSettingsKeyEvent(it, state) },
+            .background(PanelBg),
     ) {
         SettingsHeader()
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+        Divider(color = Border)
 
         Row(
             modifier = Modifier
@@ -97,10 +96,11 @@ fun SettingsPane(state: AppState) {
                 },
             )
 
-            HorizontalDivider(
+            Divider(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(1.dp), thickness = DividerDefaults.Thickness, color = Border
+                    .width(1.dp),
+                color = Border,
             )
 
             SettingsContent(
@@ -236,7 +236,6 @@ private fun SettingsContent(
                 .padding(horizontal = 32.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
-            SettingsKeyboardFocusStrip(state)
             when (section) {
                 SettingsSection.General -> GeneralSettings(state)
                 SettingsSection.GitHub -> GitHubSettings(state)
@@ -247,101 +246,6 @@ private fun SettingsContent(
             }
             Spacer(Modifier.height(28.dp))
         }
-    }
-}
-
-@Composable
-private fun SettingsKeyboardFocusStrip(state: AppState) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = Color(0xFF2C3323),
-        border = BorderStroke(1.dp, Olive.copy(alpha = 0.32f)),
-        shape = RoundedCornerShape(12.dp),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = currentSettingsSection(state).label,
-                color = Olive,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.labelMedium,
-            )
-            Text(
-                text = currentSettingsRowLabel(state),
-                color = TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = "Enter",
-                color = TextMuted,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
-
-private fun handleSettingsKeyEvent(
-    event: KeyEvent,
-    state: AppState,
-): Boolean {
-    if (event.type != KeyEventType.KeyDown) return false
-
-    if (state.keyboardMode == KeyboardMode.Insert) {
-        if (event.key == Key.Escape) {
-            state.keyboardMode = KeyboardMode.Normal
-            return true
-        }
-        return false
-    }
-
-    val primary = event.isCtrlPressed || event.isMetaPressed
-
-    if (primary && event.key == Key.S) {
-        state.saveConfig()
-        state.statusLine = "Settings saved"
-        return true
-    }
-
-    return when (event.key) {
-        Key.DirectionDown, Key.J -> {
-            moveSettingsRow(state, 1)
-            true
-        }
-
-        Key.DirectionUp, Key.K -> {
-            moveSettingsRow(state, -1)
-            true
-        }
-
-        Key.DirectionRight, Key.L -> {
-            moveSettingsSection(state, 1)
-            true
-        }
-
-        Key.DirectionLeft, Key.H -> {
-            moveSettingsSection(state, -1)
-            true
-        }
-
-        Key.Enter -> {
-            activateFocusedSettingsRow(state)
-            true
-        }
-
-        Key.Escape -> {
-            state.selectView(View.NeedsReview)
-            true
-        }
-
-        else -> false
     }
 }
 
@@ -393,6 +297,17 @@ private fun GeneralSettings(state: AppState) {
             options = listOf("Comfortable", "Compact"),
             onSelected = {
                 state.compactRows = it == "Compact"
+                state.saveConfig()
+            },
+        )
+        SettingsDivider()
+        ChoiceSettingRow(
+            title = "Default grouping",
+            description = "Group queues by repository outside the Today view.",
+            value = if (state.groupByRepository) "Repository" else "None",
+            options = listOf("None", "Repository"),
+            onSelected = {
+                state.groupByRepository = it == "Repository"
                 state.saveConfig()
             },
         )
@@ -461,7 +376,7 @@ private fun GitHubSettings(state: AppState) {
         }
 
         if (advancedOpen) {
-            HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+            Divider(color = Border)
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -472,15 +387,7 @@ private fun GitHubSettings(state: AppState) {
                     label = { Text("GitHub CLI executable") },
                     placeholder = { Text(platformGhPathExample()) },
                     singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { focusState ->
-                            state.keyboardMode = if (focusState.isFocused) {
-                                KeyboardMode.Insert
-                            } else {
-                                KeyboardMode.Normal
-                            }
-                        },
+                    modifier = Modifier.fillMaxWidth(),
                     colors = revqTextFieldColors(),
                 )
 
@@ -592,7 +499,7 @@ private fun GitHubConnectionCard(state: AppState) {
 
             if (failed) {
                 Text(
-                    text = result.lineSequence().firstOrNull().orEmpty().take(240),
+                    text = result.orEmpty().lineSequence().firstOrNull().orEmpty().take(240),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -619,21 +526,29 @@ private fun TrackingSettings(state: AppState) {
             emptyMessage = "No repositories configured yet.",
             onRemove = { state.removeRepository(it) },
         )
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+        Divider(color = Border)
         InlineAddRow(
             value = repositoryDraft,
             onValueChange = { repositoryDraft = it },
             placeholder = "owner/repository",
             actionLabel = "Add repository",
-            state = state,
             onAdd = {
                 val value = repositoryDraft.trim()
                 if (parseRepo(value) == null) {
                     state.statusLine = "Invalid repository. Use owner/repository."
                 } else {
-                    state.repositoriesText = (parseLines(state.repositoriesText) + value).distinct().sorted().joinToString("\n")
+                    state.repositoriesText = (parseLines(state.repositoriesText) + value)
+                        .distinct()
+                        .sorted()
+                        .joinToString("\n")
+                    if (state.discoveredTrackingRepositories.isNotEmpty()) {
+                        state.discoveredTrackingRepositories =
+                            (state.discoveredTrackingRepositories + value).distinct().sorted()
+                        state.pendingTrackedRepositories =
+                            state.pendingTrackedRepositories + value
+                    }
                     state.saveConfig()
-                    state.statusLine = "Added $value"
+                    state.statusLine = "Tracking $value"
                     repositoryDraft = ""
                 }
             },
@@ -647,13 +562,12 @@ private fun TrackingSettings(state: AppState) {
             emptyMessage = "No organizations configured yet.",
             onRemove = { state.removeOrganization(it) },
         )
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+        Divider(color = Border)
         InlineAddRow(
             value = organizationDraft,
             onValueChange = { organizationDraft = it },
             placeholder = "organization",
             actionLabel = "Add organization",
-            state = state,
             onAdd = {
                 val value = organizationDraft.trim()
                 if (value.isBlank() || value.contains("/") || value.contains(" ")) {
@@ -666,15 +580,22 @@ private fun TrackingSettings(state: AppState) {
                 }
             },
         )
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+        Divider(color = Border)
         ActionSettingRow(
             title = "Discover repositories",
-            description = "Find repositories from the organizations listed above.",
+            description = "Find available repositories from the organizations above. Discovery never changes what RevQ tracks until you apply a selection.",
             actionLabel = if (state.isDiscovering) "Discovering…" else "Discover",
             enabled = !state.isDiscovering,
             onClick = { state.discoverTargets() },
             showProgress = state.isDiscovering,
         )
+    }
+
+    if (state.discoveredTrackingRepositories.isNotEmpty()) {
+        SettingsSectionLabel("DISCOVERED REPOSITORIES")
+        SettingsGroup {
+            DiscoveredTrackingSelection(state)
+        }
     }
 
     SettingsSectionLabel("MUTED REPOSITORIES")
@@ -690,13 +611,12 @@ private fun TrackingSettings(state: AppState) {
                 state.saveConfig()
             },
         )
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+        Divider(color = Border)
         InlineAddRow(
             value = mutedDraft,
             onValueChange = { mutedDraft = it },
             placeholder = "owner/repository",
             actionLabel = "Mute repository",
-            state = state,
             onAdd = {
                 val value = mutedDraft.trim()
                 if (parseRepo(value) == null) {
@@ -713,6 +633,176 @@ private fun TrackingSettings(state: AppState) {
 }
 
 @Composable
+private fun DiscoveredTrackingSelection(state: AppState) {
+    val query = state.repositoryDiscoveryQuery.trim().lowercase()
+    val repositories = state.discoveredTrackingRepositories
+    val visibleRepositories = repositories.filter {
+        query.isBlank() || it.lowercase().contains(query)
+    }
+    val selectedCount = state.pendingTrackedRepositories.size
+
+    Column {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "Choose repositories to track",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "$selectedCount selected of ${repositories.size} available",
+                        color = TextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                TextButton(
+                    onClick = { state.selectAllDiscoveredTrackingRepositories() },
+                ) {
+                    Text("Select all", color = Olive)
+                }
+
+                TextButton(
+                    onClick = { state.clearPendingTrackingSelection() },
+                ) {
+                    Text("Clear", color = TextMuted)
+                }
+            }
+
+            OutlinedTextField(
+                value = state.repositoryDiscoveryQuery,
+                onValueChange = { state.repositoryDiscoveryQuery = it },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                        tint = TextMuted,
+                    )
+                },
+                placeholder = { Text("Search discovered repositories") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = revqTextFieldColors(),
+            )
+        }
+
+        SettingsDivider()
+
+        if (visibleRepositories.isEmpty()) {
+            Text(
+                text = if (query.isBlank()) {
+                    "No repositories discovered."
+                } else {
+                    "No repositories match \"${state.repositoryDiscoveryQuery}\"."
+                },
+                color = TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                visibleRepositories.forEachIndexed { index, repository ->
+                    DiscoveredTrackingRepositoryRow(
+                        repository = repository,
+                        selected = repository in state.pendingTrackedRepositories,
+                        onToggle = {
+                            state.togglePendingTrackedRepository(repository)
+                        },
+                    )
+                    if (index != visibleRepositories.lastIndex) {
+                        SettingsDivider()
+                    }
+                }
+            }
+        }
+
+        SettingsDivider()
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(
+                onClick = { state.cancelTrackingDiscovery() },
+            ) {
+                Text("Cancel", color = TextMuted)
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            Button(
+                onClick = { state.applyTrackingRepositorySelection() },
+            ) {
+                Text("Apply selection")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoveredTrackingRepositoryRow(
+    repository: String,
+    selected: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Surface(
+            modifier = Modifier.size(24.dp),
+            color = if (selected) Olive.copy(alpha = 0.18f) else Color.Transparent,
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (selected) Olive.copy(alpha = 0.65f) else Border,
+            ),
+            shape = RoundedCornerShape(6.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (selected) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = Olive,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = repository,
+            color = if (selected) TextPrimary else TextMuted,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun ReviewSettings(state: AppState) {
     SettingsSectionHeader(
         title = "Review",
@@ -721,16 +811,6 @@ private fun ReviewSettings(state: AppState) {
 
     SettingsSectionLabel("REVIEW BEHAVIOR")
     SettingsGroup {
-        ToggleSettingRow(
-            title = "Focus review mode",
-            description = "Keep review-oriented views centered on Needs Review.",
-            checked = state.focusReviewMode,
-            onCheckedChange = {
-                state.focusReviewMode = it
-                state.saveConfig()
-            },
-        )
-        SettingsDivider()
         ChoiceSettingRow(
             title = "Default sort",
             description = "Choose how pull requests are ordered when a queue opens.",
@@ -1005,7 +1085,7 @@ private fun DataSettings(state: AppState) {
         if (displayDiagnosticsOpen) {
             val density = LocalDensity.current
             val toolkitScale = runCatching { Toolkit.getDefaultToolkit().screenResolution / 96f }.getOrDefault(1f)
-            HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+            Divider(color = Border)
             StaticSettingRow("Compose density", "${"%.2f".format(density.density)}x")
             SettingsDivider()
             StaticSettingRow("Font scale", "${"%.2f".format(density.fontScale)}x")
@@ -1170,10 +1250,9 @@ private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun SettingsDivider() {
-    HorizontalDivider(
+    Divider(
         modifier = Modifier.padding(horizontal = 16.dp),
-        thickness = DividerDefaults.Thickness,
-        color = Border
+        color = Border,
     )
 }
 
@@ -1470,7 +1549,6 @@ private fun InlineAddRow(
     placeholder: String,
     actionLabel: String,
     onAdd: () -> Unit,
-    state: AppState? = null,
 ) {
     Row(
         modifier = Modifier.padding(14.dp),
@@ -1482,17 +1560,7 @@ private fun InlineAddRow(
             onValueChange = onValueChange,
             placeholder = { Text(placeholder) },
             singleLine = true,
-            modifier = Modifier
-                .weight(1f)
-                .onFocusChanged { focusState ->
-                    if (state != null) {
-                        state.keyboardMode = if (focusState.isFocused) {
-                            KeyboardMode.Insert
-                        } else {
-                            KeyboardMode.Normal
-                        }
-                    }
-                },
+            modifier = Modifier.weight(1f),
             colors = revqTextFieldColors(),
         )
         Button(
@@ -1524,7 +1592,7 @@ private fun SecondaryButton(
 }
 
 private fun isSetupIncomplete(state: AppState): Boolean {
-    val trackingMissing = parseLines(state.repositoriesText).isEmpty() && parseLines(state.organizationsText).isEmpty()
+    val trackingMissing = parseLines(state.repositoriesText).isEmpty()
     return state.ghPathText.isBlank() || trackingMissing
 }
 

@@ -22,8 +22,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DividerDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,10 +56,11 @@ fun ReminderWindow(state: AppState) {
                 queueSize = queue.size,
             )
 
-            HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+            Divider(color = Border)
 
             if (first == null) {
                 ReminderEmptyState(
+                    state = state,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -110,7 +110,7 @@ fun ReminderWindow(state: AppState) {
                 }
             }
 
-            HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
+            Divider(color = Border)
 
             ReminderActions(
                 state = state,
@@ -155,9 +155,9 @@ private fun ReminderHeader(
             }
 
             Text(
-                text = when (queueSize) {
-                    0 -> "Your queue is clear"
-                    1 -> "One review is waiting"
+                text = when {
+                    queueSize == 0 -> "Your queue is clear"
+                    queueSize == 1 -> "One review is waiting"
                     else -> "$queueSize reviews are waiting"
                 },
                 color = TextPrimary,
@@ -166,9 +166,9 @@ private fun ReminderHeader(
             )
 
             Text(
-                text = when (queueSize) {
-                    0 -> "Nothing needs your review right now."
-                    1 -> "This is how RevQ will surface your review queue when a reminder is due."
+                text = when {
+                    queueSize == 0 -> "Nothing needs your review right now."
+                    state.reminderWindowIsPreview -> "This is how RevQ will surface your review queue when a reminder is due."
                     else -> "Take a focused pass through the queue, or snooze this reminder until later."
                 },
                 color = TextMuted,
@@ -376,6 +376,7 @@ private fun ReminderQueueRow(
 
 @Composable
 private fun ReminderEmptyState(
+    state: AppState,
     modifier: Modifier = Modifier,
 ) {
     val spec = emptyStateSpec(View.NeedsReview)
@@ -438,7 +439,7 @@ private fun ReminderActions(
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Start review session", fontWeight = FontWeight.Bold)
+                Text("Open review queue", fontWeight = FontWeight.Bold)
             }
         }
 

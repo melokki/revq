@@ -58,6 +58,26 @@ class CommandPaletteModelTest {
     }
 
     @Test
+    fun repositoryScopePaletteIncludesTrackedOrganizations() {
+        val state = AppState().apply {
+            organizationsText = "acme\nplatform"
+            repositoriesText = "acme/mobile"
+        }
+
+        val results = PaletteResultProvider.results(
+            PaletteMode.RepositoryScope,
+            state,
+            "acme",
+        )
+
+        assertTrue(
+            results.any {
+                it is PaletteResult.OrganizationResult && it.organization == "acme"
+            },
+        )
+    }
+
+    @Test
     fun blankUniversalPaletteShowsRecentPaletteTargets() {
         val review = reviewRequest(title = "Recent keyboard target")
         val state = AppState().apply {
@@ -89,7 +109,7 @@ class CommandPaletteModelTest {
     @Test
     fun quickRunLabelsSkipDisabledVisibleResults() {
         val disabled = PaletteResult.CommandResult(
-            command = CommandRegistry.find(CommandId.StartReviewSession)!!,
+            command = CommandRegistry.find(CommandId.Refresh)!!,
             section = PaletteSection.Actions,
             enabled = false,
             disabledReason = null,
@@ -116,13 +136,14 @@ class CommandPaletteModelTest {
 
     @Test
     fun disabledCommandResultsShowWhyTheyCannotRun() {
-        val results = PaletteResultProvider.results(PaletteMode.Universal, AppState(), "start review")
-        val startReview = results
+        val state = AppState().apply { isRefreshing = true }
+        val results = PaletteResultProvider.results(PaletteMode.Universal, state, "refresh")
+        val refresh = results
             .filterIsInstance<PaletteResult.CommandResult>()
-            .first { it.command.id == CommandId.StartReviewSession }
+            .first { it.command.id == CommandId.Refresh }
 
-        assertFalse(startReview.enabled)
-        assertEquals("No PRs need review right now.", startReview.subtitle)
+        assertFalse(refresh.enabled)
+        assertEquals("Refresh is already running.", refresh.subtitle)
     }
 
     @Test
@@ -143,25 +164,25 @@ class CommandPaletteModelTest {
         )
 
         assertEquals("Open #42 in Needs Review", prResult.executionPreview())
-        assertEquals("Filter current view to acme/mobile", repositoryResult.executionPreview())
+        assertEquals("Scope all queues to acme/mobile", repositoryResult.executionPreview())
         assertEquals("Unavailable: Unavailable right now.", disabledCommand.executionPreview())
     }
 
     @Test
     fun commandPreviewExplainsSensitiveActions() {
-        val clearFilter = PaletteResult.CommandResult(
-            command = CommandRegistry.find(CommandId.ClearFilter)!!,
+        val togglePin = PaletteResult.CommandResult(
+            command = CommandRegistry.find(CommandId.ToggleSelectedPrPin)!!,
             section = PaletteSection.Actions,
             enabled = true,
         )
-        val endSession = PaletteResult.CommandResult(
-            command = CommandRegistry.find(CommandId.EndReviewSession)!!,
+        val toggleMute = PaletteResult.CommandResult(
+            command = CommandRegistry.find(CommandId.ToggleMuteSelectedRepository)!!,
             section = PaletteSection.Actions,
             enabled = true,
         )
 
-        assertEquals("Clear the active pull request filter", clearFilter.executionPreview())
-        assertEquals("End the current review session", endSession.executionPreview())
+        assertEquals("Pin or unpin the selected pull request", togglePin.executionPreview())
+        assertEquals("Hide or restore the selected repository", toggleMute.executionPreview())
     }
 
     @Test

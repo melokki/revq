@@ -5,6 +5,14 @@ import kotlin.test.assertEquals
 
 class SettingsKeyboardModelTest {
     @Test
+    fun reviewKeyboardRowsMatchVisibleReviewSettings() {
+        assertEquals(
+            listOf("Default sort", "Stale after"),
+            settingsRowLabels(SettingsSection.Review),
+        )
+    }
+
+    @Test
     fun movingRowsStaysWithinTheCurrentSettingsSection() {
         val state = AppState().apply {
             settingsSectionIndex = SettingsSection.General.ordinal

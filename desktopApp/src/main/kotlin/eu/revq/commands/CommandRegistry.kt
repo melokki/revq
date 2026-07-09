@@ -1,60 +1,22 @@
 package eu.revq.commands
 
+import eu.revq.AppState
 import eu.revq.PullRequestSource
+import eu.revq.View
 
 object CommandRegistry {
     private val commands: List<AppCommand> = listOf(
         AppCommand(
-            id = CommandId.StartReviewSession,
-            title = "Start review session",
-            description = "Begin a focused pass through the review queue.",
-            category = CommandCategory.Review,
-            aliases = listOf("review", "session", "start reviewing"),
-            isEnabled = { it.reviewQueueSize > 0 && !it.reviewSessionActive },
-            disabledReason = {
-                when {
-                    it.reviewSessionActive -> "A review session is already active."
-                    it.reviewQueueSize == 0 -> "No PRs need review right now."
-                    else -> null
-                }
-            },
-        ),
-        AppCommand(
             id = CommandId.MarkSelectedReviewed,
-            title = "Mark reviewed & next",
-            description = "Handle the selected review locally and advance to the next review.",
+            title = "Handle or merge selected PR",
+            description = "Mark a review request handled, or merge an approved clean personal PR.",
             category = CommandCategory.Review,
-            aliases = listOf("done", "handled", "reviewed", "ship", "complete", "finish review"),
+            aliases = listOf("done", "handled", "reviewed", "merge", "merge pr"),
             shortcut = Shortcut.single(ShortcutKey.M),
             isEnabled = {
-                it.selectedPullRequest?.source == PullRequestSource.ReviewRequest
+                it.selectedPullRequest?.source == PullRequestSource.ReviewRequest ||
+                        it.canMergeSelectedPullRequest
             },
-            disabledReason = {
-                if (it.selectedPullRequest == null) {
-                    "Select a review request first."
-                } else {
-                    "The selected PR is not waiting on your review."
-                }
-            },
-        ),
-        AppCommand(
-            id = CommandId.UndoLastReviewed,
-            title = "Undo last reviewed",
-            description = "Restore the last pull request you marked reviewed.",
-            category = CommandCategory.Review,
-            aliases = listOf("undo", "restore", "unreview", "bring back"),
-            shortcut = Shortcut.single(ShortcutKey.U),
-            isEnabled = { it.canUndoReview },
-            disabledReason = { "Nothing reviewed in this session to undo." },
-        ),
-        AppCommand(
-            id = CommandId.PreviousReview,
-            title = "Previous review",
-            description = "Move to the previous pull request in the review queue.",
-            category = CommandCategory.Review,
-            aliases = listOf("previous", "back", "prior review"),
-            isEnabled = { it.canGoPreviousReview },
-            disabledReason = { "No previous review is available." },
         ),
         AppCommand(
             id = CommandId.NextReview,
@@ -64,26 +26,15 @@ object CommandRegistry {
             aliases = listOf("next", "skip"),
             shortcut = Shortcut.single(ShortcutKey.S),
             isEnabled = { it.reviewQueueSize > 0 },
-            disabledReason = { "No PRs need review right now." },
-        ),
-        AppCommand(
-            id = CommandId.EndReviewSession,
-            title = "End review session",
-            description = "Leave the focused review session and keep the current queue intact.",
-            category = CommandCategory.Review,
-            aliases = listOf("end session", "stop reviewing", "exit session"),
-            isEnabled = { it.reviewSessionActive },
-            disabledReason = { "No review session is active." },
         ),
         AppCommand(
             id = CommandId.OpenSelectedPrInGitHub,
             title = "Open selected PR",
             description = "Open the selected pull request in GitHub.",
             category = CommandCategory.Review,
-            aliases = listOf("github", "browser", "open pull request", "open pr", "view pr"),
+            aliases = listOf("github", "browser", "open pull request"),
             shortcut = Shortcut.single(ShortcutKey.O),
             isEnabled = { it.hasSelectedPullRequest },
-            disabledReason = { "Select a pull request first." },
         ),
         AppCommand(
             id = CommandId.CopySelectedPrUrl,
@@ -92,7 +43,6 @@ object CommandRegistry {
             aliases = listOf("copy link", "url"),
             shortcut = Shortcut.single(ShortcutKey.C),
             isEnabled = { it.hasSelectedPullRequest },
-            disabledReason = { "Select a pull request first." },
         ),
         AppCommand(
             id = CommandId.CopySelectedPrMarkdown,
@@ -100,7 +50,6 @@ object CommandRegistry {
             category = CommandCategory.Review,
             aliases = listOf("markdown", "copy markdown"),
             isEnabled = { it.hasSelectedPullRequest },
-            disabledReason = { "Select a pull request first." },
         ),
         AppCommand(
             id = CommandId.CopyReviewQueueDigest,
@@ -109,7 +58,6 @@ object CommandRegistry {
             aliases = listOf("digest", "queue summary"),
             shortcut = Shortcut.single(ShortcutKey.D),
             isEnabled = { it.reviewQueueSize > 0 },
-            disabledReason = { "No PRs need review right now." },
         ),
         AppCommand(
             id = CommandId.ToggleSelectedPrPin,
@@ -118,7 +66,6 @@ object CommandRegistry {
             aliases = listOf("pin", "unpin", "favorite"),
             shortcut = Shortcut.single(ShortcutKey.P),
             isEnabled = { it.hasSelectedPullRequest },
-            disabledReason = { "Select a pull request first." },
         ),
         AppCommand(
             id = CommandId.OpenTopReviewPullRequests,
@@ -126,7 +73,6 @@ object CommandRegistry {
             category = CommandCategory.Review,
             aliases = listOf("open queue", "batch open"),
             isEnabled = { it.reviewQueueSize > 0 },
-            disabledReason = { "No PRs need review right now." },
         ),
         AppCommand(
             id = CommandId.OpenSelectedRepository,
@@ -134,7 +80,6 @@ object CommandRegistry {
             category = CommandCategory.Review,
             aliases = listOf("repository", "repo", "github repository"),
             isEnabled = { it.hasSelectedPullRequest },
-            disabledReason = { "Select a pull request first." },
         ),
         AppCommand(
             id = CommandId.ToggleMuteSelectedRepository,
@@ -142,14 +87,13 @@ object CommandRegistry {
             category = CommandCategory.Review,
             aliases = listOf("mute repository", "unmute repository", "hide repo"),
             isEnabled = { it.hasSelectedPullRequest },
-            disabledReason = { "Select a pull request first." },
         ),
 
         AppCommand(
             id = CommandId.GoToNeedsReview,
             title = "Go to Needs Review",
             category = CommandCategory.Navigate,
-            aliases = listOf("reviews", "queue", "review queue", "needs review", "close settings", "exit settings", "back to reviews"),
+            aliases = listOf("reviews", "queue"),
         ),
         AppCommand(
             id = CommandId.GoToPinned,
@@ -161,13 +105,13 @@ object CommandRegistry {
             id = CommandId.GoToMyPullRequests,
             title = "Go to My Pull Requests",
             category = CommandCategory.Navigate,
-            aliases = listOf("mine", "my prs", "authored", "my pull requests"),
+            aliases = listOf("mine", "my prs", "authored"),
         ),
         AppCommand(
             id = CommandId.GoToBlocked,
             title = "Go to Blocked",
             category = CommandCategory.Navigate,
-            aliases = listOf("blocked", "failing", "stuck", "conflict"),
+            aliases = listOf("blocked", "failing"),
         ),
         AppCommand(
             id = CommandId.GoToReady,
@@ -191,7 +135,7 @@ object CommandRegistry {
             id = CommandId.GoToSettings,
             title = "Go to Settings",
             category = CommandCategory.Navigate,
-            aliases = listOf("preferences", "configuration", "config", "prefs", "options"),
+            aliases = listOf("preferences", "configuration", "config"),
         ),
 
         AppCommand(
@@ -205,52 +149,11 @@ object CommandRegistry {
             disabledReason = { "Refresh is already running." },
         ),
         AppCommand(
-            id = CommandId.ClearFilter,
-            title = "Clear active filter",
-            description = "Clear the palette-applied pull request filter.",
-            category = CommandCategory.System,
-            aliases = listOf("clear filter", "clear search", "remove filter", "show all"),
-            isEnabled = { it.hasActiveFilter },
-            disabledReason = { "No filter is active." },
-        ),
-        AppCommand(
-            id = CommandId.ToggleGroupByRepository,
-            title = "Toggle repository grouping",
-            description = "Group or ungroup the current pull request list by repository.",
-            category = CommandCategory.System,
-            aliases = listOf("group", "group by repository", "ungroup", "repository sections"),
-            isEnabled = { it.view != eu.revq.View.Today && it.view != eu.revq.View.Settings },
-            disabledReason = {
-                if (it.view == eu.revq.View.Today) {
-                    "Today already uses fixed sections."
-                } else {
-                    "Repository grouping is not available here."
-                }
-            },
-        ),
-        AppCommand(
-            id = CommandId.ToggleCompactRows,
-            title = "Toggle compact rows",
-            description = "Switch pull request rows between compact and comfortable density.",
-            category = CommandCategory.System,
-            aliases = listOf("rows", "compact rows", "comfortable rows", "density"),
-        ),
-        AppCommand(
-            id = CommandId.CycleSortMode,
-            title = "Cycle sort mode",
-            description = "Move to the next pull request sort mode.",
-            category = CommandCategory.System,
-            aliases = listOf("sort", "cycle sort", "sort mode", "order"),
-            isEnabled = { it.view != eu.revq.View.Settings },
-            disabledReason = { "Sorting is not available in Settings." },
-        ),
-        AppCommand(
             id = CommandId.TestGitHubCli,
             title = "Test GitHub CLI",
             category = CommandCategory.System,
             aliases = listOf("gh", "connection", "github cli"),
             isEnabled = { !it.isTestingGh },
-            disabledReason = { "GitHub CLI test is already running." },
         ),
         AppCommand(
             id = CommandId.DiscoverRepositories,
@@ -258,14 +161,6 @@ object CommandRegistry {
             category = CommandCategory.System,
             aliases = listOf("discover", "repositories", "organizations"),
             isEnabled = { !it.isDiscovering },
-            disabledReason = { "Repository discovery is already running." },
-        ),
-        AppCommand(
-            id = CommandId.ToggleFocusReviewMode,
-            title = "Toggle focus review mode",
-            category = CommandCategory.System,
-            aliases = listOf("focus", "focus mode"),
-            shortcut = Shortcut.single(ShortcutKey.F),
         ),
         AppCommand(
             id = CommandId.PreviewReminder,
@@ -300,4 +195,46 @@ object CommandRegistry {
         commands.firstOrNull { command ->
             command.shortcut?.strokes == listOf(stroke)
         }
+
+    fun execute(
+        commandId: CommandId,
+        state: AppState,
+    ): CommandExecutionResult {
+        val command = find(commandId) ?: return CommandExecutionResult.Missing
+        if (!command.isEnabled(CommandContext.from(state))) {
+            return CommandExecutionResult.Disabled
+        }
+
+        when (commandId) {
+            CommandId.MarkSelectedReviewed -> state.performSelectedMAction()
+            CommandId.NextReview -> state.nextReview()
+            CommandId.OpenSelectedPrInGitHub -> state.openSelectedInGitHub()
+            CommandId.CopySelectedPrUrl -> state.copySelectedUrl()
+            CommandId.CopySelectedPrMarkdown -> state.copySelectedMarkdown()
+            CommandId.CopyReviewQueueDigest -> state.copyReviewDigest()
+            CommandId.ToggleSelectedPrPin -> state.togglePin()
+            CommandId.OpenTopReviewPullRequests -> state.openTopReviewPullRequests()
+            CommandId.OpenSelectedRepository -> state.openSelectedRepository()
+            CommandId.ToggleMuteSelectedRepository -> state.toggleMuteSelectedRepository()
+
+            CommandId.GoToNeedsReview -> state.selectView(View.NeedsReview)
+            CommandId.GoToMyPullRequests -> state.selectView(View.Mine)
+            CommandId.GoToPinned -> state.selectView(View.Pinned)
+            CommandId.GoToToday -> state.selectView(View.Today)
+            CommandId.GoToBlocked -> state.selectView(View.Blocked)
+            CommandId.GoToReady -> state.selectView(View.Ready)
+            CommandId.GoToReviewed -> state.selectView(View.Handled)
+            CommandId.GoToSettings -> state.selectView(View.Settings)
+
+            CommandId.Refresh -> state.refresh()
+            CommandId.TestGitHubCli -> state.testGithubCli()
+            CommandId.DiscoverRepositories -> state.discoverTargets()
+            CommandId.PreviewReminder -> state.previewReminderWindow()
+            CommandId.CopyDiagnostics -> state.copyDiagnostics()
+            CommandId.ShowKeyboardShortcuts -> state.statusLine = "Use ? to open keyboard shortcuts"
+        }
+
+        state.recordCommandExecution(commandId)
+        return CommandExecutionResult.Executed
+    }
 }

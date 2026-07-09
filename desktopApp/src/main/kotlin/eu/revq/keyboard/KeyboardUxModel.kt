@@ -38,6 +38,20 @@ fun keyboardHints(
         )
     }
 
+    val expanded = state.selectedPullRequest
+        ?.takeIf { state.expandedPullRequestKey == it.key }
+    if (expanded != null) {
+        return buildList {
+            add(KeyboardHint("Esc", "Close"))
+            add(KeyboardHint("o", "Open PR"))
+            add(KeyboardHint("p", if (state.isPinned(expanded)) "Unpin" else "Pin"))
+            if (expanded.source == PullRequestSource.ReviewRequest) {
+                add(KeyboardHint("m", "Mark handled"))
+            }
+            add(KeyboardHint("Space", "Commands"))
+        }
+    }
+
     return when (state.keyboardFocusRegion) {
         FocusRegion.Sidebar -> listOf(
             KeyboardHint("j/k", "Move"),
@@ -49,6 +63,7 @@ fun keyboardHints(
             add(KeyboardHint("j/k", "Move"))
             val selected = state.selectedPullRequest
             if (selected != null) {
+                add(KeyboardHint("Enter", "Details"))
                 add(KeyboardHint("o", "GitHub"))
                 if (selected.source == PullRequestSource.ReviewRequest) {
                     add(KeyboardHint("m", "Reviewed"))
@@ -59,14 +74,6 @@ fun keyboardHints(
             add(KeyboardHint("Space", "More"))
         }
 
-        FocusRegion.ReviewBrief -> buildList {
-            add(KeyboardHint("h", "PR list"))
-            add(KeyboardHint("o", "GitHub"))
-            if (state.selectedPullRequest?.source == PullRequestSource.ReviewRequest) {
-                add(KeyboardHint("m", "Reviewed"))
-            }
-            add(KeyboardHint("Space", "More"))
-        }
     }
 }
 
@@ -88,14 +95,7 @@ fun nextKeyboardAction(state: AppState): KeyboardHint? {
         }
     }
 
-    return when {
-        state.reviewQueue().isNotEmpty() && !state.reviewSessionActive -> {
-            KeyboardHint("Space", "Start review session")
-        }
-
-        state.visiblePullRequests().isNotEmpty() -> KeyboardHint("j", "Select first PR")
-        else -> null
-    }
+    return null
 }
 
 fun activeKeyboardRegionLabel(
@@ -107,7 +107,6 @@ fun activeKeyboardRegionLabel(
     state.view == View.Settings -> "Settings"
     state.keyboardFocusRegion == FocusRegion.Sidebar -> "Sidebar"
     state.keyboardFocusRegion == FocusRegion.PullRequestList -> "Pull requests"
-    state.keyboardFocusRegion == FocusRegion.ReviewBrief -> "Review brief"
     else -> "Workspace"
 }
 

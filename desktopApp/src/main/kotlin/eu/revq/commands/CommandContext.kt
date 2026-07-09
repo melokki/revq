@@ -10,13 +10,10 @@ data class CommandContext(
     val focusRegion: FocusRegion,
     val selectedPullRequest: PullRequest?,
     val reviewQueueSize: Int,
-    val reviewSessionActive: Boolean,
+    val canMergeSelectedPullRequest: Boolean,
     val isRefreshing: Boolean,
     val isDiscovering: Boolean,
     val isTestingGh: Boolean,
-    val canUndoReview: Boolean,
-    val hasActiveFilter: Boolean,
-    val canGoPreviousReview: Boolean,
 ) {
     val hasSelectedPullRequest: Boolean
         get() = selectedPullRequest != null
@@ -27,13 +24,10 @@ data class CommandContext(
             focusRegion = state.keyboardFocusRegion,
             selectedPullRequest = state.selectedPullRequest,
             reviewQueueSize = state.reviewQueue().size,
-            reviewSessionActive = state.reviewSessionActive,
+            canMergeSelectedPullRequest = state.canMergePullRequest(state.selectedPullRequest),
             isRefreshing = state.isRefreshing,
             isDiscovering = state.isDiscovering,
             isTestingGh = state.isTestingGh,
-            canUndoReview = state.lastUndoReview != null,
-            hasActiveFilter = state.searchQuery.isNotBlank(),
-            canGoPreviousReview = eu.revq.canGoPrevious(state),
         )
     }
 }

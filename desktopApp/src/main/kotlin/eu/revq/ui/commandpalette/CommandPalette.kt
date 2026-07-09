@@ -64,8 +64,8 @@ import eu.revq.PanelElevated
 import eu.revq.TextMuted
 import eu.revq.TextPrimary
 import eu.revq.commands.CommandExecutionResult
-import eu.revq.commands.CommandExecutor
 import eu.revq.commands.CommandId
+import eu.revq.commands.CommandRegistry
 import eu.revq.keyboard.FocusRegion
 import eu.revq.revqTextFieldColors
 
@@ -80,7 +80,6 @@ fun CommandPalette(
     val listState = rememberLazyListState()
     val queryFocusRequester = remember { FocusRequester() }
     val paletteFocusRequester = remember { FocusRequester() }
-    val executor = remember(state) { CommandExecutor(state) }
     val quickRunLabels = quickRunShortcutLabels(results)
     val selectedResult = results.getOrNull(paletteState.selectedIndex)
 
@@ -117,7 +116,7 @@ fun CommandPalette(
                     return
                 }
 
-                val execution = executor.execute(result.command.id)
+                val execution = CommandRegistry.execute(result.command.id, state)
                 if (execution == CommandExecutionResult.Executed) {
                     paletteState.close()
                 }
@@ -133,13 +132,41 @@ fun CommandPalette(
             }
 
             is PaletteResult.RepositoryResult -> {
-                state.recordPaletteTarget("repo:${result.repository}")
-                if (state.view == eu.revq.View.Settings) {
-                    state.selectView(eu.revq.View.NeedsReview)
+                if (result.scopeSelection) {
+                    result.repository?.let {
+                        state.recordPaletteTarget("repo:$it")
+                        state.setQueueScopeFilter(eu.revq.QueueScopeFilter.Repository(it))
+                        state.statusLine = "Repository scope: $it"
+                    } ?: run {
+                        state.clearQueueScopeFilter()
+                    }
+                    paletteState.close()
+                } else {
+                    result.repository?.let { repository ->
+                        state.recordPaletteTarget("repo:$repository")
+                        if (state.view == eu.revq.View.Settings) {
+                            state.selectView(eu.revq.View.NeedsReview)
+                        }
+                        state.setQueueScopeFilter(
+                            eu.revq.QueueScopeFilter.Repository(repository),
+                        )
+                        state.keyboardFocusRegion = FocusRegion.PullRequestList
+                    }
+                    paletteState.close()
                 }
-                state.searchQuery = result.repository
-                state.selectedPullRequest = null
+            }
+
+            is PaletteResult.OrganizationResult -> {
+                state.setQueueScopeFilter(
+                    eu.revq.QueueScopeFilter.Organization(result.organization),
+                )
+                state.statusLine = "Organization scope: ${result.organization}"
                 state.keyboardFocusRegion = FocusRegion.PullRequestList
+                paletteState.close()
+            }
+
+            PaletteResult.RepositoryManagementResult -> {
+                state.openTrackingSettings()
                 paletteState.close()
             }
 
@@ -569,6 +596,8 @@ private fun paletteResultIcon(result: PaletteResult): ImageVector = when (result
     is PaletteResult.CommandResult -> Icons.Rounded.KeyboardCommandKey
     is PaletteResult.PullRequestResult -> Icons.AutoMirrored.Rounded.OpenInNew
     is PaletteResult.RepositoryResult -> Icons.Rounded.FolderOpen
+    is PaletteResult.OrganizationResult -> Icons.Rounded.FolderOpen
+    PaletteResult.RepositoryManagementResult -> Icons.Rounded.FolderOpen
     is PaletteResult.ShortcutResult -> Icons.Rounded.KeyboardCommandKey
     PaletteResult.GoToTopResult -> Icons.Rounded.KeyboardCommandKey
 }

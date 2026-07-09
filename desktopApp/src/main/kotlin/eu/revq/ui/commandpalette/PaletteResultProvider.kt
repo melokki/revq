@@ -11,6 +11,7 @@ import eu.revq.commands.CommandCategory
 import eu.revq.commands.CommandContext
 import eu.revq.commands.CommandId
 import eu.revq.commands.CommandRegistry
+import eu.revq.commands.CommandSurface
 
 object PaletteResultProvider {
     fun results(
@@ -20,6 +21,7 @@ object PaletteResultProvider {
     ): List<PaletteResult> {
         val raw = when (mode) {
             PaletteMode.Universal -> universalResults(state, query)
+            PaletteMode.RepositoryScope -> repositoryScopeResults(state)
         }
         return filterPaletteResults(raw, query)
     }
@@ -48,7 +50,6 @@ object PaletteResultProvider {
                 CommandId.GoToNeedsReview,
                 CommandId.GoToSettings,
                 CommandId.Refresh,
-                CommandId.ToggleCompactRows,
                 CommandId.ShowKeyboardShortcuts,
             )
             val usedIds = contextualIds + recent.map { it.command.id }
@@ -93,48 +94,13 @@ object PaletteResultProvider {
     }
 
     private fun contextActionResults(state: AppState): List<PaletteResult> {
-        val context = CommandContext.from(state)
-        val selected = state.selectedPullRequest
-
-        val ids = buildList {
-            if (state.searchQuery.isNotBlank()) {
-                add(CommandId.ClearFilter)
-            }
-
-            if (state.reviewSessionActive) {
-                add(CommandId.PreviousReview)
-                add(CommandId.NextReview)
-                add(CommandId.EndReviewSession)
-            }
-
-            if (state.reviewQueue().isNotEmpty() && !state.reviewSessionActive) {
-                add(CommandId.StartReviewSession)
-            }
-
-            if (selected != null) {
-                add(CommandId.OpenSelectedPrInGitHub)
-                if (selected.source == PullRequestSource.ReviewRequest) {
-                    add(CommandId.MarkSelectedReviewed)
-                    add(CommandId.NextReview)
-                }
-                add(CommandId.ToggleSelectedPrPin)
-                add(CommandId.CopySelectedPrUrl)
-                add(CommandId.CopySelectedPrMarkdown)
-                add(CommandId.OpenSelectedRepository)
-                add(CommandId.ToggleMuteSelectedRepository)
-            }
-
-        }
-
-        return ids
-            .distinct()
-            .mapNotNull(CommandRegistry::find)
-            .filter { it.isEnabled(context) }
-            .map { command ->
+        return CommandSurface.contextualCommands(state)
+            .map { entry ->
                 PaletteResult.CommandResult(
-                    command = command,
+                    command = entry.command,
                     section = PaletteSection.Actions,
-                    enabled = true,
+                    enabled = entry.enabled,
+                    disabledReason = entry.disabledReason,
                 )
             }
     }
@@ -207,26 +173,59 @@ object PaletteResultProvider {
         PullRequestSource.Mine -> View.Mine
     }
 
-    private fun repositoryResults(state: AppState): List<PaletteResult.RepositoryResult> {
-        val repositories = (
-                state.activePullRequests().map { it.repository.toString() } +
-                        parseLines(state.repositoriesText)
-                )
+    private fun repositoryResults(state: AppState): List<PaletteResult.RepositoryResult> =
+        parseLines(state.repositoriesText)
             .distinct()
             .sorted()
             .filterNot(state::isRepositoryMuted)
+            .map { PaletteResult.RepositoryResult(repository = it) }
 
-        return repositories.map { PaletteResult.RepositoryResult(it) }
+    private fun repositoryScopeResults(state: AppState): List<PaletteResult> {
+        val currentScope = state.currentQueueScopeFilter()
+        val currentRepository = (currentScope as? eu.revq.QueueScopeFilter.Repository)?.nameWithOwner
+        val currentOrganization = (currentScope as? eu.revq.QueueScopeFilter.Organization)?.owner
+        val trackedRepositories = parseLines(state.repositoriesText)
+            .distinct()
+            .sorted()
+        val trackedOrganizations = (
+            parseLines(state.organizationsText) +
+                trackedRepositories.mapNotNull { it.substringBefore('/').takeIf(String::isNotBlank) }
+            )
+            .distinct()
+            .sorted()
+
+        return buildList {
+            add(
+                PaletteResult.RepositoryResult(
+                    repository = null,
+                    selected = currentScope == eu.revq.QueueScopeFilter.All,
+                    scopeSelection = true,
+                ),
+            )
+            trackedOrganizations.forEach { organization ->
+                add(
+                    PaletteResult.OrganizationResult(
+                        organization = organization,
+                        selected = organization == currentOrganization,
+                    ),
+                )
+            }
+            trackedRepositories.forEach { repository ->
+                add(
+                    PaletteResult.RepositoryResult(
+                        repository = repository,
+                        selected = repository == currentRepository,
+                        scopeSelection = true,
+                    ),
+                )
+            }
+            add(PaletteResult.RepositoryManagementResult)
+        }
     }
 
     private fun recentTargetResults(state: AppState): List<PaletteResult> {
         val pullRequests = state.activePullRequests().associateBy { it.key }
-        val repositories = (
-                state.activePullRequests().map { it.repository.toString() } +
-                        parseLines(state.repositoriesText)
-                )
-            .distinct()
-            .toSet()
+        val repositories = parseLines(state.repositoriesText).toSet()
 
         return state.recentPaletteTargets.mapNotNull { target ->
             when {
@@ -236,7 +235,7 @@ object PaletteResultProvider {
                 }
                 target.startsWith("repo:") -> {
                     val repo = target.removePrefix("repo:")
-                    if (repo in repositories) PaletteResult.RepositoryResult(repo) else null
+                    if (repo in repositories) PaletteResult.RepositoryResult(repository = repo) else null
                 }
                 else -> null
             }
@@ -252,10 +251,10 @@ object PaletteResultProvider {
     private fun shortcutReferenceResults(state: AppState): List<PaletteResult> {
         val movement = listOf(
             shortcut("movement:j-k", "Move selection", "Move within the focused region", "j / k", PaletteSection.Movement),
-            shortcut("movement:h-l", "Move between panes", "Sidebar, PR list, and Review Brief", "h / l", PaletteSection.Movement),
-            shortcut("movement:last", "Last item", "Jump to the end of the focused list", "G", PaletteSection.Movement),
-            shortcut("movement:half", "Half-page movement", "Move through longer lists quickly", "Ctrl+u / Ctrl+d", PaletteSection.Movement),
-            shortcut("movement:activate", "Activate", "Open the focused view, brief, or action", "Enter", PaletteSection.Movement),
+            shortcut("movement:h-l", "Move between regions", "Sidebar and pull request list", "h / l", PaletteSection.Movement),
+            shortcut("movement:first-last", "First or last item", "Jump to a queue boundary", "Home / End", PaletteSection.Movement),
+            shortcut("movement:page", "Viewport movement", "Move through longer lists by one viewport", "Page Up / Down", PaletteSection.Movement),
+            shortcut("movement:activate", "Toggle details", "Expand or close inline details for the selected pull request", "Enter", PaletteSection.Movement),
             shortcut("movement:escape", "Back / close", "Return to the previous keyboard context", "Esc", PaletteSection.Movement),
         )
 

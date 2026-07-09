@@ -77,172 +77,477 @@ private enum class BriefStatusTone {
 }
 
 @Composable
-fun ReviewBriefPanel(state: AppState) {
-    val pr = state.selectedPullRequest ?: return
+fun InlineReviewBrief(
+    state: AppState,
+    pr: PullRequest,
+) {
+    val signals = compactInlineSignals(state, pr)
+    val nextAction = compactInlineNextAction(state, pr)
 
     Column(
         modifier = Modifier
-            .width(470.dp)
-            .fillMaxHeight()
-            .background(InspectorBg),
+            .fillMaxWidth()
+            .background(Color(0xFF23282E))
+            .padding(start = 76.dp, end = 22.dp, top = 14.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ReviewBriefHeader(
-            state = state,
-            pr = pr,
-            onClose = { state.selectedPullRequest = null },
-        )
+        CompactSignalGrid(signals)
 
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
-
-        LazyColumn(
+        Row(
             modifier = Modifier
-                .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+                .clip(RoundedCornerShape(10.dp))
+                .background(RecommendationBg)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (pr.source == PullRequestSource.Mine) {
-                item { OwnPullRequestHero(pr) }
-                item { OwnPullRequestSignals(pr) }
-                item { OwnPullRequestReviewSection(pr) }
-                item { OwnPullRequestChecksSection(pr) }
-                item { OwnPullRequestMergeabilitySection(pr) }
-                if (pr.comments > 0 || pr.discussionNeedsResponse) {
-                    item { OwnPullRequestDiscussionSection(pr) }
-                }
-                item {
-                    ReviewBriefSection(
-                        label = "ACTIVITY",
-                        body = activitySummary(pr),
-                        detail = activityDetail(state, pr),
-                    )
-                }
-            } else {
-                item { ReviewRequestHero(state, pr) }
-                item { ReviewRequestSection(pr) }
-                item { ReviewReadinessSection(pr) }
-                item {
-                    ReviewBriefSection(
-                        label = "ACTIVITY",
-                        body = activitySummary(pr),
-                        detail = activityDetail(state, pr),
-                    )
-                }
-                if (state.isHandledCurrent(pr)) {
-                    item {
-                        ReviewBriefSection(
-                            label = "LOCAL STATE",
-                            body = "Reviewed locally",
-                            detail = "This review stays out of Needs Review until GitHub reports new activity on the pull request.",
-                        )
-                    }
-                } else {
-                    item { ReviewQueueSection(state, pr) }
-                }
-            }
+            Text(
+                text = "NEXT",
+                color = compactNextActionColor(state, pr),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+            )
 
-            item { Spacer(Modifier.height(2.dp)) }
+            Text(
+                text = nextAction,
+                color = TextPrimary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
         }
 
-        HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
-
-        ReviewBriefActionBar(
+        CompactInlineActionStrip(
             state = state,
             pr = pr,
         )
     }
 }
 
-@Composable
-private fun ReviewBriefHeader(
-    state: AppState,
-    pr: PullRequest,
-    onClose: () -> Unit,
-) {
-    val ownStatus = if (pr.source == PullRequestSource.Mine) ownPullRequestPrimaryStatus(pr) else null
-    val eyebrow = when {
-        pr.source == PullRequestSource.Mine -> "YOUR PULL REQUEST"
-        state.isHandledCurrent(pr) -> "REVIEWED REQUEST"
-        else -> "REVIEW BRIEF"
-    }
-    val statusColor = when {
-        ownStatus != null -> colorForOwnPullRequestStatus(ownStatus)
-        state.isHandledCurrent(pr) -> TextMuted
-        else -> Olive
-    }
-    val statusText = when {
-        ownStatus != null -> ownPullRequestStatusTitle(ownStatus)
-        state.isHandledCurrent(pr) -> "Reviewed locally"
-        else -> "Needs your review"
-    }
+private data class CompactBriefSignal(
+    val label: String,
+    val value: String,
+    val tone: BriefStatusTone = BriefStatusTone.Neutral,
+)
 
+@Composable
+private fun CompactSignalGrid(signals: List<CompactBriefSignal>) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .clip(RoundedCornerShape(10.dp))
+            .background(SubtleSectionBg)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = eyebrow,
-                color = TextMuted,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f),
-            )
+        signals.take(6).chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                CompactSignalCell(
+                    signal = pair[0],
+                    modifier = Modifier.weight(1f),
+                )
 
-            BriefIconAction(
-                label = if (state.isPinned(pr)) "Unpin pull request" else "Pin pull request",
-                icon = if (state.isPinned(pr)) Icons.Rounded.Star else Icons.Rounded.StarBorder,
-                tint = if (state.isPinned(pr)) Olive else TextMuted,
-                state = state,
-                onClick = { state.togglePin(pr) },
-            )
-
-            BriefIconAction(
-                label = "Close review brief",
-                icon = Icons.Rounded.Close,
-                state = state,
-                onClick = onClose,
-            )
-        }
-
-        Text(
-            text = pr.title,
-            color = TextPrimary,
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-
-        Text(
-            text = "${pr.repository} · #${pr.number}",
-            color = TextMuted,
-            style = MaterialTheme.typography.bodySmall,
-        )
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(statusColor),
-            )
-
-            Text(
-                text = "$statusText · updated ${staleOrRelativeLabel(pr.updatedAt)}",
-                color = TextMuted,
-                style = MaterialTheme.typography.bodySmall,
-            )
+                if (pair.size > 1) {
+                    CompactSignalCell(
+                        signal = pair[1],
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun CompactSignalCell(
+    signal: CompactBriefSignal,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = signal.label,
+            color = TextMuted,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(88.dp),
+            maxLines = 1,
+        )
+
+        Text(
+            text = signal.value,
+            color = compactToneColor(signal.tone),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (signal.tone == BriefStatusTone.Neutral) {
+                FontWeight.Normal
+            } else {
+                FontWeight.SemiBold
+            },
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun CompactInlineActionStrip(
+    state: AppState,
+    pr: PullRequest,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        CompactInlineAction(
+            keyLabel = "Enter",
+            label = "Close",
+            onClick = { state.togglePullRequestDetails(pr) },
+        )
+        CompactInlineAction(
+            keyLabel = "o",
+            label = "Open",
+            onClick = { openUrl(pr.url) },
+        )
+        CompactInlineAction(
+            keyLabel = "p",
+            label = if (state.isPinned(pr)) "Unpin" else "Pin",
+            onClick = { state.togglePin(pr) },
+        )
+
+        if (
+            pr.source == PullRequestSource.ReviewRequest &&
+            !state.isHandledCurrent(pr)
+        ) {
+            CompactInlineAction(
+                keyLabel = "m",
+                label = "Handled",
+                onClick = { state.markReviewed(pr) },
+            )
+        }
+
+        if (pr.source == PullRequestSource.Mine && state.isPullRequestReadyToMerge(pr)) {
+            val merging = state.mergingPullRequestKey == pr.key
+            CompactInlineAction(
+                keyLabel = "m",
+                label = if (merging) "Merging…" else "Merge",
+                enabled = !merging && !state.isMergingPullRequest,
+                onClick = { state.mergePullRequest(pr) },
+            )
+        }
+
+        CompactInlineAction(
+            keyLabel = "c",
+            label = "Copy",
+            onClick = { state.copySelectedMarkdown() },
+        )
+    }
+}
+
+@Composable
+private fun CompactInlineAction(
+    keyLabel: String,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 7.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = keyLabel,
+            color = if (enabled) Olive else TextMuted,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = label,
+            color = TextMuted,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun compactToneColor(tone: BriefStatusTone): Color = when (tone) {
+    BriefStatusTone.Positive -> ReadyGreen
+    BriefStatusTone.Neutral -> TextPrimary
+    BriefStatusTone.Warning -> Amber
+    BriefStatusTone.Negative -> MaterialTheme.colorScheme.error
+}
+
+private fun compactInlineSignals(
+    state: AppState,
+    pr: PullRequest,
+): List<CompactBriefSignal> {
+    return if (pr.source == PullRequestSource.Mine) {
+        compactOwnPullRequestSignals(pr)
+    } else {
+        compactReviewRequestSignals(state, pr)
+    }
+}
+
+private fun compactReviewRequestSignals(
+    state: AppState,
+    pr: PullRequest,
+): List<CompactBriefSignal> = listOf(
+    CompactBriefSignal(
+        label = "REVIEW",
+        value = when {
+            state.isHandledCurrent(pr) -> "Handled locally"
+            pr.isDraft -> "Requested on draft"
+            else -> "Waiting for you"
+        },
+        tone = when {
+            state.isHandledCurrent(pr) -> BriefStatusTone.Neutral
+            pr.isDraft -> BriefStatusTone.Warning
+            else -> BriefStatusTone.Neutral
+        },
+    ),
+    compactCiSignal(pr),
+    CompactBriefSignal(
+        label = "REVIEWS",
+        value = compactReviewState(pr),
+        tone = when (pr.reviewDecision?.uppercase()) {
+            "APPROVED" -> BriefStatusTone.Positive
+            "CHANGES_REQUESTED" -> BriefStatusTone.Warning
+            else -> BriefStatusTone.Neutral
+        },
+    ),
+    compactDiscussionSignal(pr),
+    compactMergeSignal(pr),
+    CompactBriefSignal(
+        label = "ACTIVITY",
+        value = when {
+            state.handledReviewRecords[pr.key]
+                ?.let { it != pr.updatedMarker } == true -> "Updated since handled"
+            else -> "Updated ${staleOrRelativeLabel(pr.updatedAt)}"
+        },
+        tone = if (
+            state.handledReviewRecords[pr.key]
+                ?.let { it != pr.updatedMarker } == true
+        ) {
+            BriefStatusTone.Warning
+        } else {
+            BriefStatusTone.Neutral
+        },
+    ),
+)
+
+private fun compactOwnPullRequestSignals(
+    pr: PullRequest,
+): List<CompactBriefSignal> {
+    val status = ownPullRequestPrimaryStatus(pr)
+    val peopleSignal = compactOwnPeopleSignal(status, pr)
+
+    return listOfNotNull(
+        CompactBriefSignal(
+            label = "ATTENTION",
+            value = ownPullRequestStatusTitle(status),
+            tone = toneForOwnStatus(status),
+        ),
+        peopleSignal,
+        compactCiSignal(pr),
+        CompactBriefSignal(
+            label = "REVIEWS",
+            value = compactReviewState(pr),
+            tone = when (pr.reviewDecision?.uppercase()) {
+                "APPROVED" -> BriefStatusTone.Positive
+                "CHANGES_REQUESTED" -> BriefStatusTone.Negative
+                else -> BriefStatusTone.Neutral
+            },
+        ),
+        compactDiscussionSignal(pr),
+        compactMergeSignal(pr),
+    )
+}
+
+private fun compactOwnPeopleSignal(
+    status: OwnPullRequestStatus,
+    pr: PullRequest,
+): CompactBriefSignal? {
+    return when (status) {
+        OwnPullRequestStatus.ChangesRequested ->
+            formatIdentityList(pr.changeRequestReviewers)
+                ?.let {
+                    CompactBriefSignal(
+                        label = "BY",
+                        value = it,
+                        tone = BriefStatusTone.Negative,
+                    )
+                }
+
+        OwnPullRequestStatus.WaitingForReviewer ->
+            formatIdentityList(pr.requestedReviewers)
+                ?.let {
+                    CompactBriefSignal(
+                        label = "WAITING ON",
+                        value = it,
+                    )
+                }
+
+        OwnPullRequestStatus.ApprovedAndReady ->
+            formatIdentityList(pr.approvingReviewers)
+                ?.let {
+                    CompactBriefSignal(
+                        label = "APPROVED BY",
+                        value = it,
+                        tone = BriefStatusTone.Positive,
+                    )
+                }
+
+        OwnPullRequestStatus.DiscussionNeedsResponse ->
+            formatIdentityList(pr.unresolvedDiscussionAuthors)
+                ?.let {
+                    CompactBriefSignal(
+                        label = "THREADS WITH",
+                        value = it,
+                        tone = BriefStatusTone.Warning,
+                    )
+                }
+
+        else -> null
+    }
+}
+
+private fun compactCiSignal(pr: PullRequest): CompactBriefSignal = when {
+    pr.checksFailing > 0 -> CompactBriefSignal(
+        label = "CI",
+        value = "${pr.checksFailing} failing",
+        tone = BriefStatusTone.Negative,
+    )
+
+    pr.checksPending > 0 -> CompactBriefSignal(
+        label = "CI",
+        value = "${pr.checksPending} pending",
+        tone = BriefStatusTone.Warning,
+    )
+
+    pr.checksTotal > 0 -> CompactBriefSignal(
+        label = "CI",
+        value = "${pr.checksTotal} passing",
+        tone = BriefStatusTone.Positive,
+    )
+
+    else -> CompactBriefSignal(
+        label = "CI",
+        value = "Not reported",
+    )
+}
+
+private fun compactDiscussionSignal(pr: PullRequest): CompactBriefSignal {
+    val unresolved = pr.unresolvedDiscussionCount
+
+    return when {
+        unresolved == null -> CompactBriefSignal(
+            label = "DISCUSSIONS",
+            value = "Unavailable",
+        )
+
+        unresolved > 0 -> CompactBriefSignal(
+            label = "DISCUSSIONS",
+            value = "$unresolved unresolved",
+            tone = BriefStatusTone.Warning,
+        )
+
+        else -> CompactBriefSignal(
+            label = "DISCUSSIONS",
+            value = "None open",
+            tone = BriefStatusTone.Positive,
+        )
+    }
+}
+
+private fun compactMergeSignal(pr: PullRequest): CompactBriefSignal = when {
+    pr.mergeable.equals("CONFLICTING", ignoreCase = true) ||
+            pr.mergeStateStatus.equals("DIRTY", ignoreCase = true) ->
+        CompactBriefSignal(
+            label = "MERGE",
+            value = "Conflict",
+            tone = BriefStatusTone.Negative,
+        )
+
+    pr.mergeable.equals("MERGEABLE", ignoreCase = true) ->
+        CompactBriefSignal(
+            label = "MERGE",
+            value = "Clean",
+            tone = BriefStatusTone.Positive,
+        )
+
+    else -> CompactBriefSignal(
+        label = "MERGE",
+        value = "Undetermined",
+    )
+}
+
+private fun compactReviewState(pr: PullRequest): String {
+    return when (pr.reviewDecision?.uppercase()) {
+        "APPROVED" ->
+            formatIdentityList(pr.approvingReviewers)
+                ?.let { "Approved by $it" }
+                ?: "Approved"
+
+        "CHANGES_REQUESTED" ->
+            formatIdentityList(pr.changeRequestReviewers)
+                ?.let { "Changes requested by $it" }
+                ?: "Changes requested"
+
+        "REVIEW_REQUIRED" ->
+            formatIdentityList(pr.requestedReviewers)
+                ?.let { "Waiting on $it" }
+                ?: "Review required"
+
+        else -> when {
+            pr.reviewRequestsCount > 0 ->
+                "${pr.reviewRequestsCount} requested"
+            else -> "No decision yet"
+        }
+    }
+}
+
+private fun compactInlineNextAction(
+    state: AppState,
+    pr: PullRequest,
+): String = PullRequestAttention.describe(
+    pullRequest = pr,
+    handledMarker = state.handledReviewRecords[pr.key],
+).nextAction
+
+@Composable
+private fun compactNextActionColor(
+    state: AppState,
+    pr: PullRequest,
+): Color {
+    if (pr.source == PullRequestSource.ReviewRequest) {
+        return when {
+            state.isHandledCurrent(pr) -> TextMuted
+            pr.checksFailing > 0 -> MaterialTheme.colorScheme.error
+            pr.mergeable.equals("CONFLICTING", ignoreCase = true) ||
+                    pr.mergeStateStatus.equals("DIRTY", ignoreCase = true) ->
+                MaterialTheme.colorScheme.error
+            (pr.unresolvedDiscussionCount ?: 0) > 0 -> Amber
+            else -> Olive
+        }
+    }
+
+    return colorForOwnPullRequestStatus(
+        ownPullRequestPrimaryStatus(pr),
+    )
 }
 
 @Composable
@@ -665,61 +970,6 @@ private fun toneForOwnStatus(status: OwnPullRequestStatus): BriefStatusTone = wh
 }
 
 @Composable
-private fun ReviewQueueSection(
-    state: AppState,
-    pr: PullRequest,
-) {
-    val queue = state.reviewQueue()
-    val index = queue.indexOfFirst { it.key == pr.key }
-    val position = if (index >= 0) index + 1 else null
-    val remaining = when {
-        position == null -> queue.size
-        else -> (queue.size - position).coerceAtLeast(0)
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        ReviewBriefSection(
-            label = "QUEUE",
-            body = when {
-                position != null -> "Review $position of ${queue.size}"
-                else -> queuePositionCopy(state, pr)
-            },
-            detail = when {
-                state.reviewSessionActive && remaining > 0 -> "$remaining reviews remain after this one."
-                state.reviewSessionActive -> "This is the last review in the current queue."
-                else -> "Start or continue a review session from the main workspace."
-            },
-        )
-
-        if (state.reviewSessionActive && position != null && queue.isNotEmpty()) {
-            ReviewQueueRail(position = position, total = queue.size)
-        }
-    }
-}
-
-@Composable
-private fun ReviewQueueRail(
-    position: Int,
-    total: Int,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        repeat(total.coerceAtMost(12)) { index ->
-            val active = index < position
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(if (active) Olive else Border),
-            )
-        }
-    }
-}
-
-@Composable
 private fun ReviewBriefActionBar(
     state: AppState,
     pr: PullRequest,
@@ -762,56 +1012,42 @@ private fun ReviewBriefActionBar(
         }
 
         if (canMarkReviewed) {
-            if (state.reviewSessionActive) {
-                Button(
-                    onClick = { state.markReviewed(pr) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = PanelElevated,
-                        contentColor = TextPrimary,
-                    ),
-                    border = BorderStroke(1.dp, Border),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Done,
-                        contentDescription = null,
-                        modifier = Modifier.size(17.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Mark reviewed & next")
-                    Spacer(Modifier.weight(1f))
-                    ShortcutPill("Space")
-                }
+            Button(
+                onClick = { state.markReviewed(pr) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PanelElevated,
+                    contentColor = TextPrimary,
+                ),
+                border = BorderStroke(1.dp, Border),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Done,
+                    contentDescription = null,
+                    modifier = Modifier.size(17.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Mark reviewed")
+            }
+        }
 
-                TextButton(
-                    onClick = { state.nextReview() },
-                    enabled = state.reviewQueue().size > 1,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Skip for now")
-                    Spacer(Modifier.weight(1f))
-                    ShortcutPill("N")
-                }
-            } else {
-                Button(
-                    onClick = { state.markReviewed(pr) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = PanelElevated,
-                        contentColor = TextPrimary,
-                    ),
-                    border = BorderStroke(1.dp, Border),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Done,
-                        contentDescription = null,
-                        modifier = Modifier.size(17.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Mark reviewed")
-                    Spacer(Modifier.weight(1f))
-                    ShortcutPill("Space")
-                }
+        if (pr.source == PullRequestSource.Mine && state.isPullRequestReadyToMerge(pr)) {
+            Button(
+                onClick = { state.mergePullRequest(pr) },
+                enabled = !state.isMergingPullRequest,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Olive,
+                    contentColor = Color(0xFF151812),
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    if (state.mergingPullRequestKey == pr.key) {
+                        "Merging…"
+                    } else {
+                        "Merge pull request"
+                    },
+                )
             }
         }
     }

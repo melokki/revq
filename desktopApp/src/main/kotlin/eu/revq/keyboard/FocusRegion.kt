@@ -4,5 +4,4 @@ package eu.revq.keyboard
 enum class FocusRegion {
     Sidebar,
     PullRequestList,
-    ReviewBrief,
 }

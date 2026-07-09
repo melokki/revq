@@ -21,51 +21,116 @@ enum class SettingsSection(
     Data("Data & diagnostics", Icons.Rounded.DataObject),
 }
 
-fun settingsRowLabels(section: SettingsSection): List<String> = when (section) {
+private data class SettingsInteractionRow(
+    val label: String,
+    val activate: (AppState) -> Unit,
+)
+
+private fun settingsRows(section: SettingsSection): List<SettingsInteractionRow> = when (section) {
     SettingsSection.General -> listOf(
-        "Auto refresh",
-        "Refresh interval",
-        "Row density",
+        SettingsInteractionRow("Auto refresh") {
+            it.autoRefreshEnabled = !it.autoRefreshEnabled
+            it.saveConfig()
+        },
+        SettingsInteractionRow("Refresh interval") { state ->
+            cycleValue(state.autoRefreshIntervalMinutesText, listOf("1", "5", "10", "15", "30", "60")) {
+                state.autoRefreshIntervalMinutesText = it
+                state.saveConfig()
+            }
+        },
+        SettingsInteractionRow("Row density") {
+            it.compactRows = !it.compactRows
+            it.saveConfig()
+        },
     )
 
     SettingsSection.GitHub -> listOf(
-        "Test connection",
-        "Run auto-detection again",
-        "Executable override",
+        SettingsInteractionRow("Test connection", AppState::testGithubCli),
+        SettingsInteractionRow("Run auto-detection again", AppState::autoDetectGithubCli),
+        SettingsInteractionRow("Executable override") {
+            it.statusLine = "Tab to the executable field, edit, then press Apply override."
+        },
     )
 
     SettingsSection.Tracking -> listOf(
-        "Tracked repositories",
-        "Organizations",
-        "Discover repositories",
-        "Muted repositories",
+        SettingsInteractionRow("Tracked repositories") {
+            it.statusLine = "Tab to the text field or row action, then press Enter."
+        },
+        SettingsInteractionRow("Organizations") {
+            it.statusLine = "Tab to the text field or row action, then press Enter."
+        },
+        SettingsInteractionRow("Discover repositories", AppState::discoverTargets),
+        SettingsInteractionRow("Muted repositories") {
+            it.statusLine = "Tab to the text field or row action, then press Enter."
+        },
     )
 
     SettingsSection.Review -> listOf(
-        "Focus review mode",
-        "Default sort",
-        "Stale after",
+        SettingsInteractionRow("Default sort") { state ->
+            cycleValue(state.sortMode, WorkspaceSortModes) {
+                state.sortMode = it
+                state.saveConfig()
+            }
+        },
+        SettingsInteractionRow("Stale after") { state ->
+            cycleValue(state.staleThresholdDaysText, listOf("1", "2", "3", "5", "7", "14")) {
+                state.staleThresholdDaysText = it
+                state.saveConfig()
+            }
+        },
     )
 
     SettingsSection.Reminders -> listOf(
-        "Scheduled reminders",
-        "Reminder time",
-        "Reminder days",
-        "Snooze duration",
-        "Only when reviews are waiting",
-        "Quiet hours",
-        "Preview reminder window",
+        SettingsInteractionRow("Scheduled reminders") {
+            it.reminderEnabled = !it.reminderEnabled
+            it.saveConfig()
+        },
+        SettingsInteractionRow("Reminder time") { state ->
+            cycleValue(state.reminderTimeText, reminderTimeOptions()) {
+                state.reminderTimeText = it
+                state.saveConfig()
+            }
+        },
+        SettingsInteractionRow("Reminder days") {
+            it.statusLine = "Use Tab to reach individual reminder day chips."
+        },
+        SettingsInteractionRow("Snooze duration") { state ->
+            cycleValue(state.reminderSnoozeMinutesText, listOf("15", "30", "60", "120", "240")) {
+                state.reminderSnoozeMinutesText = it
+                state.saveConfig()
+            }
+        },
+        SettingsInteractionRow("Only when reviews are waiting") {
+            it.remindOnlyWhenQueueNotClear = !it.remindOnlyWhenQueueNotClear
+            it.saveConfig()
+        },
+        SettingsInteractionRow("Quiet hours") { state ->
+            cycleValue(state.quietHoursText, listOf("Off", "18:00-08:00", "20:00-08:00", "22:00-07:00")) {
+                state.quietHoursText = it
+                state.saveConfig()
+            }
+        },
+        SettingsInteractionRow("Preview reminder window", AppState::previewReminderWindow),
     )
 
     SettingsSection.Data -> listOf(
-        "Clear cache",
-        "Clear reviewed state",
-        "Test connection",
-        "Copy diagnostics",
-        "Validate tracking",
-        "Display diagnostics",
+        SettingsInteractionRow("Clear cache") {
+            it.statusLine = "Use Tab to reach Clear cache, then press Enter."
+        },
+        SettingsInteractionRow("Clear reviewed state") {
+            it.statusLine = "Use Tab to reach Clear reviewed state, then press Enter."
+        },
+        SettingsInteractionRow("Test connection", AppState::testGithubCli),
+        SettingsInteractionRow("Copy diagnostics", AppState::copyDiagnostics),
+        SettingsInteractionRow("Validate tracking", AppState::validateTrackingText),
+        SettingsInteractionRow("Display diagnostics") {
+            it.statusLine = "Use Tab to show display diagnostics."
+        },
     )
 }
+
+fun settingsRowLabels(section: SettingsSection): List<String> =
+    settingsRows(section).map(SettingsInteractionRow::label)
 
 fun currentSettingsSection(state: AppState): SettingsSection =
     SettingsSection.entries[state.settingsSectionIndex.coerceIn(SettingsSection.entries.indices)]
@@ -94,116 +159,14 @@ fun moveSettingsRow(
 }
 
 fun activateFocusedSettingsRow(state: AppState) {
-    when (currentSettingsSection(state)) {
-        SettingsSection.General -> activateGeneralSettingsRow(state)
-        SettingsSection.GitHub -> activateGithubSettingsRow(state)
-        SettingsSection.Tracking -> activateTrackingSettingsRow(state)
-        SettingsSection.Review -> activateReviewSettingsRow(state)
-        SettingsSection.Reminders -> activateReminderSettingsRow(state)
-        SettingsSection.Data -> activateDataSettingsRow(state)
-    }
+    settingsRows(currentSettingsSection(state))
+        .getOrNull(state.settingsFocusedRowIndex)
+        ?.activate(state)
 }
 
 private fun clampSettingsRow(state: AppState) {
     val labels = settingsRowLabels(currentSettingsSection(state))
     state.settingsFocusedRowIndex = state.settingsFocusedRowIndex.coerceIn(labels.indices)
-}
-
-private fun activateGeneralSettingsRow(state: AppState) {
-    when (state.settingsFocusedRowIndex) {
-        0 -> {
-            state.autoRefreshEnabled = !state.autoRefreshEnabled
-            state.saveConfig()
-        }
-
-        1 -> cycleValue(state.autoRefreshIntervalMinutesText, listOf("1", "5", "10", "15", "30", "60")) {
-            state.autoRefreshIntervalMinutesText = it
-            state.saveConfig()
-        }
-
-        2 -> {
-            state.compactRows = !state.compactRows
-            state.saveConfig()
-        }
-
-    }
-}
-
-private fun activateGithubSettingsRow(state: AppState) {
-    when (state.settingsFocusedRowIndex) {
-        0 -> state.testGithubCli()
-        1 -> state.autoDetectGithubCli()
-        2 -> state.statusLine = "Tab to the executable field, edit, then press Apply override."
-    }
-}
-
-private fun activateTrackingSettingsRow(state: AppState) {
-    when (state.settingsFocusedRowIndex) {
-        2 -> state.discoverTargets()
-        else -> state.statusLine = "Tab to the text field or row action, then press Enter."
-    }
-}
-
-private fun activateReviewSettingsRow(state: AppState) {
-    when (state.settingsFocusedRowIndex) {
-        0 -> {
-            state.focusReviewMode = !state.focusReviewMode
-            state.saveConfig()
-        }
-
-        1 -> cycleValue(state.sortMode, listOf("Urgency", "Updated newest", "Updated oldest", "Repository", "Comments")) {
-            state.sortMode = it
-            state.saveConfig()
-        }
-
-        2 -> cycleValue(state.staleThresholdDaysText, listOf("1", "2", "3", "5", "7", "14")) {
-            state.staleThresholdDaysText = it
-            state.saveConfig()
-        }
-    }
-}
-
-private fun activateReminderSettingsRow(state: AppState) {
-    when (state.settingsFocusedRowIndex) {
-        0 -> {
-            state.reminderEnabled = !state.reminderEnabled
-            state.saveConfig()
-        }
-
-        1 -> cycleValue(state.reminderTimeText, reminderTimeOptions()) {
-            state.reminderTimeText = it
-            state.saveConfig()
-        }
-
-        2 -> state.statusLine = "Use Tab to reach individual reminder day chips."
-        3 -> cycleValue(state.reminderSnoozeMinutesText, listOf("15", "30", "60", "120", "240")) {
-            state.reminderSnoozeMinutesText = it
-            state.saveConfig()
-        }
-
-        4 -> {
-            state.remindOnlyWhenQueueNotClear = !state.remindOnlyWhenQueueNotClear
-            state.saveConfig()
-        }
-
-        5 -> cycleValue(state.quietHoursText, listOf("Off", "18:00-08:00", "20:00-08:00", "22:00-07:00")) {
-            state.quietHoursText = it
-            state.saveConfig()
-        }
-
-        6 -> state.previewReminderWindow()
-    }
-}
-
-private fun activateDataSettingsRow(state: AppState) {
-    when (state.settingsFocusedRowIndex) {
-        0 -> state.statusLine = "Use Tab to reach Clear cache, then press Enter."
-        1 -> state.statusLine = "Use Tab to reach Clear reviewed state, then press Enter."
-        2 -> state.testGithubCli()
-        3 -> state.copyDiagnostics()
-        4 -> state.validateTrackingText()
-        5 -> state.statusLine = "Use Tab to show display diagnostics."
-    }
 }
 
 private fun cycleValue(

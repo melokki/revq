@@ -14,6 +14,7 @@ enum class PaletteSection(val label: String) {
     System("System"),
     PullRequests("Pull requests"),
     Repositories("Repositories"),
+    Management("Management"),
     Movement("Movement"),
     Application("Application"),
 }
@@ -72,15 +73,48 @@ sealed interface PaletteResult {
     }
 
     data class RepositoryResult(
-        val repository: String,
+        val repository: String?,
+        val selected: Boolean = false,
+        val scopeSelection: Boolean = false,
     ) : PaletteResult {
-        override val stableKey: String = "repo:$repository"
-        override val title: String = repository
-        override val subtitle: String = "Filter the current view to this repository"
-        override val shortcutLabel: String? = null
+        override val stableKey: String = "repo:${repository ?: "all"}:${if (scopeSelection) "scope" else "search"}"
+        override val title: String = repository ?: "All repositories"
+        override val subtitle: String = when {
+            scopeSelection && selected -> "Current repository scope"
+            scopeSelection -> "Switch repository scope"
+            else -> "Scope all queues to this repository"
+        }
+        override val shortcutLabel: String? = if (selected) "Current" else null
         override val section: PaletteSection = PaletteSection.Repositories
         override val enabled: Boolean = true
-        override val searchableText: String = repository
+        override val searchableText: String = buildString {
+            append(repository ?: "all repositories clear scope")
+            if (selected) append(" current selected")
+        }
+    }
+
+    data class OrganizationResult(
+        val organization: String,
+        val selected: Boolean = false,
+    ) : PaletteResult {
+        override val stableKey: String = "org:$organization:scope"
+        override val title: String = organization
+        override val subtitle: String =
+            if (selected) "Current organization scope" else "Switch organization scope"
+        override val shortcutLabel: String? = if (selected) "Current" else null
+        override val section: PaletteSection = PaletteSection.Repositories
+        override val enabled: Boolean = true
+        override val searchableText: String = "$organization organization org scope"
+    }
+
+    data object RepositoryManagementResult : PaletteResult {
+        override val stableKey: String = "repository:manage"
+        override val title: String = "Manage tracked repositories"
+        override val subtitle: String = "Open Settings directly on the Tracking section"
+        override val shortcutLabel: String? = null
+        override val section: PaletteSection = PaletteSection.Management
+        override val enabled: Boolean = true
+        override val searchableText: String = "manage tracked repositories settings tracking"
     }
 
     data class ShortcutResult(
@@ -108,8 +142,6 @@ sealed interface PaletteResult {
 fun PaletteResult.executionPreview(): String = when (this) {
     is PaletteResult.CommandResult -> if (enabled) {
         when (command.id) {
-            CommandId.ClearFilter -> "Clear the active pull request filter"
-            CommandId.EndReviewSession -> "End the current review session"
             CommandId.ToggleMuteSelectedRepository -> "Hide or restore the selected repository"
             CommandId.ToggleSelectedPrPin -> "Pin or unpin the selected pull request"
             CommandId.OpenSelectedPrInGitHub -> "Open the selected pull request in GitHub"
@@ -119,27 +151,26 @@ fun PaletteResult.executionPreview(): String = when (this) {
         "Unavailable: ${subtitle ?: "This command cannot run now."}"
     }
 
-    is PaletteResult.PullRequestResult -> {
-        "Open #${pullRequest.number} in ${targetView.label}"
+    is PaletteResult.PullRequestResult -> "Open #${pullRequest.number} in ${targetView.label}"
+    is PaletteResult.RepositoryResult -> when {
+        !scopeSelection -> "Scope all queues to ${repository ?: "all repositories"}"
+        repository == null -> "Clear repository scope"
+        selected -> "Keep repository scope on $repository"
+        else -> "Switch repository scope to $repository"
     }
-
-    is PaletteResult.RepositoryResult -> {
-        "Filter current view to $repository"
-    }
-
-    is PaletteResult.ShortcutResult -> {
-        "Reference shortcut only"
-    }
-
-    PaletteResult.GoToTopResult -> {
-        "Jump to the first item in the focused region"
-    }
+    is PaletteResult.OrganizationResult ->
+        if (selected) "Keep organization scope on $organization" else "Switch organization scope to $organization"
+    PaletteResult.RepositoryManagementResult -> "Open Settings directly on repository tracking"
+    is PaletteResult.ShortcutResult -> "Reference shortcut only"
+    PaletteResult.GoToTopResult -> "Jump to the first item in the focused region"
 }
 
 fun PaletteResult.typeLabel(): String = when (this) {
     is PaletteResult.CommandResult -> "Command"
     is PaletteResult.PullRequestResult -> "PR"
-    is PaletteResult.RepositoryResult -> "Repo"
+    is PaletteResult.RepositoryResult -> if (scopeSelection) "Scope" else "Repo"
+    is PaletteResult.OrganizationResult -> "Org"
+    PaletteResult.RepositoryManagementResult -> "Action"
     is PaletteResult.ShortcutResult -> "Shortcut"
     PaletteResult.GoToTopResult -> "Nav"
 }

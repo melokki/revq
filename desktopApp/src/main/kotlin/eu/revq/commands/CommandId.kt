@@ -1,12 +1,8 @@
 package eu.revq.commands
 
 enum class CommandId {
-    StartReviewSession,
     MarkSelectedReviewed,
-    UndoLastReviewed,
-    PreviousReview,
     NextReview,
-    EndReviewSession,
     OpenSelectedPrInGitHub,
     CopySelectedPrUrl,
     CopySelectedPrMarkdown,
@@ -26,13 +22,8 @@ enum class CommandId {
     GoToSettings,
 
     Refresh,
-    ClearFilter,
-    ToggleGroupByRepository,
-    ToggleCompactRows,
-    CycleSortMode,
     TestGitHubCli,
     DiscoverRepositories,
-    ToggleFocusReviewMode,
     PreviewReminder,
     CopyDiagnostics,
     ShowKeyboardShortcuts,

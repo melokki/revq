@@ -20,6 +20,8 @@ sealed interface KeyboardAction {
     data object LastItem : KeyboardAction
     data object HalfPageDown : KeyboardAction
     data object HalfPageUp : KeyboardAction
+    data object PageDown : KeyboardAction
+    data object PageUp : KeyboardAction
     data object Activate : KeyboardAction
     data object Escape : KeyboardAction
 

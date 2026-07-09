@@ -10,6 +10,11 @@ import kotlin.test.assertTrue
 
 class KeyboardUxModelTest {
     @Test
+    fun emptyQueueHasNoNextKeyboardAction() {
+        assertEquals(null, nextKeyboardAction(AppState()))
+    }
+
+    @Test
     fun reviewRequestSelectionShowsRelevantDirectActions() {
         val review = pullRequest(PullRequestSource.ReviewRequest)
         val state = AppState().apply {
@@ -20,6 +25,7 @@ class KeyboardUxModelTest {
 
         val hints = keyboardHints(state, paletteOpen = false)
 
+        assertTrue(KeyboardHint("Enter", "Details") in hints)
         assertTrue(KeyboardHint("o", "GitHub") in hints)
         assertTrue(KeyboardHint("m", "Reviewed") in hints)
         assertTrue(KeyboardHint("p", "Pin") in hints)
@@ -81,11 +87,9 @@ class KeyboardUxModelTest {
 
     @Test
     fun activeKeyboardRegionLabelNamesTheCurrentKeyboardTarget() {
-        val state = AppState().apply {
-            keyboardFocusRegion = FocusRegion.ReviewBrief
-        }
+        val state = AppState()
 
-        assertEquals("Review brief", activeKeyboardRegionLabel(state, paletteOpen = false))
+        assertEquals("Pull requests", activeKeyboardRegionLabel(state, paletteOpen = false))
         assertEquals("Palette", activeKeyboardRegionLabel(state, paletteOpen = true))
 
         state.keyboardMode = KeyboardMode.Insert
@@ -108,9 +112,30 @@ class KeyboardUxModelTest {
         assertEquals(
             listOf(
                 KeyboardHint("j/k", "Move"),
-                KeyboardHint("o", "GitHub"),
+                KeyboardHint("Enter", "Details"),
             ),
             compactKeyboardHints(state, paletteOpen = false),
+        )
+    }
+
+    @Test
+    fun expandedReviewShowsOnlyRelevantInlineActions() {
+        val review = pullRequest(PullRequestSource.ReviewRequest)
+        val state = AppState().apply {
+            pullRequests = listOf(review)
+            selectedPullRequest = review
+            expandedPullRequestKey = review.key
+        }
+
+        assertEquals(
+            listOf(
+                KeyboardHint("Esc", "Close"),
+                KeyboardHint("o", "Open PR"),
+                KeyboardHint("p", "Pin"),
+                KeyboardHint("m", "Mark handled"),
+                KeyboardHint("Space", "Commands"),
+            ),
+            keyboardHints(state, paletteOpen = false),
         )
     }
 
