@@ -54,8 +54,8 @@ fun keyboardHints(
 
     return when (state.keyboardFocusRegion) {
         FocusRegion.Sidebar -> listOf(
-            KeyboardHint("j/k", "Move"),
-            KeyboardHint("Enter", "Open"),
+            KeyboardHint("j/k", "Browse"),
+            KeyboardHint("l", "Focus queue"),
             KeyboardHint("Space", "More"),
         )
 

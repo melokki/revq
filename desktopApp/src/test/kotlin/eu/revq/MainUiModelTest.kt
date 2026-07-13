@@ -350,6 +350,22 @@ class MainUiModelTest {
     }
 
     @Test
+    fun browsingSidebarImmediatelyDisplaysEachQueueWithoutLeavingSidebarFocus() {
+        val state = AppState().apply {
+            selectView(View.NeedsReview)
+            keyboardFocusRegion = FocusRegion.Sidebar
+        }
+
+        listOf(View.Handled, View.Mine, View.Pinned, View.NeedsReview).forEach { expectedView ->
+            browseSidebar(state, delta = 1)
+
+            assertEquals(expectedView, state.view)
+            assertEquals(expectedView, state.sidebarKeyboardView)
+            assertEquals(FocusRegion.Sidebar, state.keyboardFocusRegion)
+        }
+    }
+
+    @Test
     fun activeFilterChipsExposePaletteAppliedFilters() {
         val state = AppState().apply {
             searchQuery = "acme/mobile"

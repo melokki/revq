@@ -3104,7 +3104,7 @@ fun RevqApp(state: AppState) {
                     border = BorderStroke(1.dp, Border),
                 ) {
                     Text(
-                        text = "Sidebar · j/k move · Enter open · l return",
+                        text = "Sidebar · j/k browse · l focus queue",
                         color = TextPrimary,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -5136,7 +5136,7 @@ private fun moveWithinFocusedRegion(
     delta: Int,
 ) {
     when (state.keyboardFocusRegion) {
-        FocusRegion.Sidebar -> moveSidebarSelection(state, delta)
+        FocusRegion.Sidebar -> browseSidebar(state, delta)
         FocusRegion.PullRequestList -> moveSelection(state, delta)
     }
 }
@@ -5241,7 +5241,7 @@ private fun escapeKeyboardContext(state: AppState) {
     }
 }
 
-private fun moveSidebarSelection(
+fun browseSidebar(
     state: AppState,
     delta: Int,
 ) {
@@ -5253,7 +5253,8 @@ private fun moveSidebarSelection(
 
     val size = SidebarKeyboardViews.size
     val nextIndex = ((currentIndex + delta) % size + size) % size
-    state.sidebarKeyboardView = SidebarKeyboardViews[nextIndex]
+    state.selectView(SidebarKeyboardViews[nextIndex])
+    state.keyboardFocusRegion = FocusRegion.Sidebar
 }
 
 fun moveSelection(state: AppState, delta: Int) {

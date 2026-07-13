@@ -119,6 +119,22 @@ class KeyboardUxModelTest {
     }
 
     @Test
+    fun sidebarHintsDescribeLiveBrowsingAndExplicitQueueFocus() {
+        val state = AppState().apply {
+            keyboardFocusRegion = FocusRegion.Sidebar
+        }
+
+        assertEquals(
+            listOf(
+                KeyboardHint("j/k", "Browse"),
+                KeyboardHint("l", "Focus queue"),
+                KeyboardHint("Space", "More"),
+            ),
+            keyboardHints(state, paletteOpen = false),
+        )
+    }
+
+    @Test
     fun expandedReviewShowsOnlyRelevantInlineActions() {
         val review = pullRequest(PullRequestSource.ReviewRequest)
         val state = AppState().apply {
