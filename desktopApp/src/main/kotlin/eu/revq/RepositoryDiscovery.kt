@@ -46,6 +46,28 @@ data class RepositoryDiscoveryResult(
     val repositories: List<DiscoveredRepository>,
 )
 
+class GitHubRepositoryDiscovery(
+    private val runCommand: (List<String>) -> String,
+) : RepositoryCatalogGateway {
+    override fun discoverRepositories(organizations: List<String>): List<String> =
+        organizations.flatMap { organization ->
+            runCommand(
+                listOf(
+                    "repo", "list", organization,
+                    "--limit", "1000",
+                    "--json", "nameWithOwner",
+                    "--template", "{{range .}}{{.nameWithOwner}}{{\"\\n\"}}{{end}}",
+                ),
+            )
+                .lineSequence()
+                .map(String::trim)
+                .filter { "/" in it }
+                .toList()
+        }
+            .distinct()
+            .sorted()
+}
+
 enum class RepositorySuggestionReason {
     ReviewRequested,
     AuthoredByYou,

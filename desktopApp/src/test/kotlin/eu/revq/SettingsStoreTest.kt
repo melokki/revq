@@ -7,6 +7,14 @@ import kotlin.test.assertEquals
 
 class SettingsStoreTest {
     @Test
+    fun testSuiteUsesAnIsolatedHomeForDefaultSettings() {
+        assertEquals(
+            "test-user-home",
+            defaultRevqConfigDirectory().parent.parent.fileName.toString(),
+        )
+    }
+
+    @Test
     fun fileStoreRoundTripsUserSettingsThroughOneInterface() {
         val directory = createTempDirectory("revq-settings-test")
         val store = FileSettingsStore(directory)
@@ -37,5 +45,28 @@ class SettingsStoreTest {
             listOf("acme/mobile", "acme/server"),
             Files.readAllLines(directory.resolve("repositories.txt")),
         )
+    }
+
+    @Test
+    fun applyingDiscoveredRepositoriesSurvivesRestartWithoutForgettingOrganization() {
+        val directory = createTempDirectory("revq-discovery-settings-test")
+        val store = FileSettingsStore(directory)
+        val state = AppState(
+            settingsStore = store,
+            configDirectory = directory,
+        ).apply {
+            organizationsText = "acme"
+            pendingTrackedRepositories = setOf("acme/mobile")
+        }
+
+        state.applyTrackingRepositorySelection()
+
+        val restarted = AppState(
+            settingsStore = store,
+            configDirectory = directory,
+        )
+        restarted.loadFromDisk()
+        assertEquals("acme/mobile", restarted.repositoriesText)
+        assertEquals("acme", restarted.organizationsText)
     }
 }

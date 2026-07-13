@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.kotlinJvm)
@@ -80,6 +81,7 @@ kotlin {
 
 dependencies {
     implementation(compose.desktop.currentOs)
+    implementation(libs.compose.components.resources)
     implementation(libs.compose.material3)
     implementation(compose.materialIconsExtended)
     implementation(libs.dbus.java.core)
@@ -87,6 +89,10 @@ dependencies {
     implementation(libs.kotlinx.coroutinesSwing)
 
     testImplementation(libs.kotlin.test)
+}
+
+compose.resources {
+    packageOfResClass = "eu.revq.resources"
 }
 
 
@@ -140,4 +146,15 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<org.jetbr
 
 tasks.withType<JavaExec> {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
+val isolatedTestHome = layout.buildDirectory.dir("test-user-home")
+
+tasks.withType<Test>().configureEach {
+    val testHome = isolatedTestHome.get().asFile
+    systemProperty("user.home", testHome.absolutePath)
+    doFirst {
+        project.delete(testHome)
+        testHome.mkdirs()
+    }
 }

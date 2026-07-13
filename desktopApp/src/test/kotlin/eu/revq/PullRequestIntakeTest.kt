@@ -6,14 +6,9 @@ import kotlin.test.assertEquals
 
 class PullRequestIntakeTest {
     @Test
-    fun refreshScopeResolvesOrganizationsAndRefreshesTheCombinedRepositorySet() = runBlocking {
+    fun refreshScopeFetchesOnlyRepositoriesExplicitlySelectedByTheUser() = runBlocking {
         val gateway = object : PullRequestIntakeGateway {
             val refreshedRepositories = mutableListOf<String>()
-
-            override fun discoverRepositories(organizations: List<String>): List<String> {
-                assertEquals(listOf("acme"), organizations)
-                return listOf("acme/server", "acme/mobile")
-            }
 
             override fun prepareRefresh(): String = "bogdan"
 
@@ -29,26 +24,24 @@ class PullRequestIntakeTest {
 
         val progress = mutableListOf<GitHubRefreshProgress>()
 
-        val result = PullRequestIntake(gateway).refreshScope(
-            explicitRepositories = listOf("personal/tools", "acme/mobile"),
-            organizations = listOf("acme"),
+        val result = PullRequestIntake(gateway).refreshSelectedRepositories(
+            selectedRepositories = listOf("personal/tools", "acme/mobile"),
             onProgress = progress::add,
         )
 
         assertEquals(
-            listOf("acme/mobile", "acme/server", "personal/tools"),
+            listOf("acme/mobile", "personal/tools"),
             gateway.refreshedRepositories,
         )
         assertEquals(
-            listOf("acme/mobile", "acme/server", "personal/tools"),
+            listOf("acme/mobile", "personal/tools"),
             result.map { it.repository.toString() },
         )
         assertEquals(
             listOf(
-                GitHubRefreshProgress(0, 3, "acme/mobile"),
-                GitHubRefreshProgress(1, 3, "acme/server"),
-                GitHubRefreshProgress(2, 3, "personal/tools"),
-                GitHubRefreshProgress(3, 3, null),
+                GitHubRefreshProgress(0, 2, "acme/mobile"),
+                GitHubRefreshProgress(1, 2, "personal/tools"),
+                GitHubRefreshProgress(2, 2, null),
             ),
             progress,
         )

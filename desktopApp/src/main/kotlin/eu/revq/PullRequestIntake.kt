@@ -1,24 +1,22 @@
 package eu.revq
 
-interface PullRequestIntakeGateway : GitHubRefreshGateway, RepositoryCatalogGateway
+interface PullRequestIntakeGateway : GitHubRefreshGateway
 
 class PullRequestIntake(
     gateway: PullRequestIntakeGateway,
 ) {
-    private val tracking = RepositoryTracking(gateway)
+    private val tracking = RepositoryTracking()
     private val refresh = GitHubRefresh(gateway)
 
-    suspend fun refreshScope(
-        explicitRepositories: List<String>,
-        organizations: List<String>,
+    suspend fun refreshSelectedRepositories(
+        selectedRepositories: List<String>,
         onProgress: (GitHubRefreshProgress) -> Unit = {},
     ): List<PullRequest> {
         val repositories = tracking.resolveRefreshTargets(
-            explicitRepositories = explicitRepositories,
-            organizations = organizations,
+            selectedRepositories = selectedRepositories,
         )
         if (repositories.isEmpty()) {
-            error("No repositories were found for the configured tracking scope.")
+            error("No repositories are selected for refresh.")
         }
         return refresh.refresh(repositories, onProgress)
     }

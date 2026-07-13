@@ -104,8 +104,14 @@ fun toStatusNotifierArgb(image: BufferedImage): ByteArray {
     return pixels
 }
 
-fun loadTrayBufferedImage(size: Int): BufferedImage {
-    val resourceName = trayIconResourceName(desktopUsesDarkAppearance())
+fun loadTrayBufferedImage(size: Int): BufferedImage =
+    loadTrayBufferedImage(size, desktopUsesDarkAppearance())
+
+fun loadTrayBufferedImage(
+    size: Int,
+    darkAppearance: Boolean,
+): BufferedImage {
+    val resourceName = trayIconResourceName(darkAppearance)
     val resource = Thread.currentThread().contextClassLoader.getResource(resourceName)
     val source = when {
         resource != null -> ImageIO.read(resource)

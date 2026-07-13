@@ -72,7 +72,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -121,6 +120,9 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeoutException
 import javax.imageio.ImageIO
 import kotlin.io.path.exists
 import kotlin.io.path.readLines
@@ -330,7 +332,7 @@ fun main() {
             visible = appState.mainWindowVisible,
             state = mainWindowState,
             title = "RevQ",
-            icon = painterResource("icon-app.png"),
+            icon = appBrandPainter(),
         ) {
             DisposableEffect(window) {
                 val listener = object : WindowAdapter() {
@@ -350,7 +352,7 @@ fun main() {
             Window(
                 onCloseRequest = { appState.closeReminderWindow() },
                 title = "RevQ Review Reminder",
-                icon = painterResource("icon-app.png"),
+                icon = appBrandPainter(),
                 undecorated = true,
                 alwaysOnTop = true,
                 resizable = false,
@@ -467,9 +469,12 @@ data class RefreshDelta(
 class AppState(
     private val pullRequestIntake: PullRequestIntake = PullRequestIntake(GhClient),
     private val settingsStore: SettingsStore = FileSettingsStore(),
+    private val configDirectory: Path = defaultRevqConfigDirectory(),
+    private val repositoryCatalog: RepositoryCatalogGateway = GhClient,
+    private val discoveryTimeoutMillis: Long = 30_000,
 ) {
     private val scope = MainScope()
-    private val configDir: Path = defaultRevqConfigDirectory()
+    private val configDir: Path = configDirectory
     private val handledFile: Path = configDir.resolve("handled-reviews.txt")
     private val uiScaleFile: Path = configDir.resolve("ui-scale.txt")
     private val cacheFile: Path = configDir.resolve("pull-requests-cache.tsv")
@@ -690,19 +695,17 @@ class AppState(
         if (isRefreshing) return
 
         val repos = parseLines(repositoriesText)
-        val organizations = parseLines(organizationsText)
-        if (repos.isEmpty() && organizations.isEmpty()) {
-            lastRefreshError = "No repositories are currently tracked. Open Tracking settings to add or discover repositories."
-            statusLine = "No repositories tracked"
+        if (repos.isEmpty()) {
+            lastRefreshError = "No repositories are selected. Discover repositories and apply a selection first."
+            statusLine = "No repositories selected"
             return
         }
 
-        refreshRepositories(repos, organizations, showReminderAfterRefresh)
+        refreshRepositories(repos, showReminderAfterRefresh)
     }
 
     private fun refreshRepositories(
-        explicitRepositories: List<String>,
-        organizations: List<String>,
+        selectedRepositories: List<String>,
         showReminderAfterRefresh: Boolean = false,
     ) {
         GhClient.configureExecutable(ghPathText)
@@ -711,17 +714,16 @@ class AppState(
         lastRefreshStartedAt = Instant.now()
         lastRefreshError = null
         lastUndoReview = null
-        refreshTotal = explicitRepositories.size
+        refreshTotal = selectedRepositories.size
         refreshDone = 0
-        refreshPhase = if (organizations.isEmpty()) "Checking GitHub CLI…" else "Resolving organization scope…"
+        refreshPhase = "Checking GitHub CLI…"
         statusLine = refreshPhase
 
         scope.launch {
             val startedAt = System.currentTimeMillis()
             try {
-                val refreshed = pullRequestIntake.refreshScope(
-                    explicitRepositories = explicitRepositories,
-                    organizations = organizations,
+                val refreshed = pullRequestIntake.refreshSelectedRepositories(
+                    selectedRepositories = selectedRepositories,
                 ) { progress ->
                     refreshTotal = progress.total
                     refreshDone = progress.completed
@@ -840,15 +842,27 @@ class AppState(
 
         isDiscovering = true
         ghTestResult = null
+        lastRefreshError = null
         statusLine = "Discovering repositories…"
 
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { GhClient.discoverRepositories(orgs) }
-                    .fold(
-                        onSuccess = { WorkerResult(value = it) },
-                        onFailure = { WorkerResult(error = it.message ?: it.toString()) },
+                val discovery = CompletableFuture.supplyAsync {
+                    repositoryCatalog.discoverRepositories(orgs)
+                }
+                try {
+                    WorkerResult(value = discovery.get(discoveryTimeoutMillis, TimeUnit.MILLISECONDS))
+                } catch (_: TimeoutException) {
+                    discovery.cancel(true)
+                    WorkerResult(
+                        error = "GitHub repository discovery timed out. Check your connection and try again.",
                     )
+                } catch (error: ExecutionException) {
+                    val cause = error.cause ?: error
+                    WorkerResult(error = cause.message ?: cause.toString())
+                } catch (error: Throwable) {
+                    WorkerResult(error = error.message ?: error.toString())
+                }
             }
 
             isDiscovering = false
@@ -908,7 +922,6 @@ class AppState(
         repositoriesText = pendingTrackedRepositories
             .sorted()
             .joinToString("\n")
-        organizationsText = ""
         saveConfig()
 
         val trackedCount = pendingTrackedRepositories.size
@@ -1783,7 +1796,7 @@ fun currentDesktopPlatform(): DesktopPlatform {
     }
 }
 
-object GhClient : PullRequestIntakeGateway {
+object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
     @Volatile
     private var configuredExecutable: String? = null
 
@@ -1797,14 +1810,9 @@ object GhClient : PullRequestIntakeGateway {
 
     override fun discoverRepositories(organizations: List<String>): List<String> {
         ensureAuthenticated()
-        return organizations.flatMap { org ->
-            runGh(
-                "repo", "list", org,
-                "--limit", "100",
-                "--json", "nameWithOwner",
-                "--template", "{{range .}}{{.nameWithOwner}}{{\"\\n\"}}{{end}}",
-            ).lines().map { it.trim() }.filter { "/" in it }
-        }.distinct().sorted()
+        return GitHubRepositoryDiscovery { command ->
+            runGh(*command.toTypedArray())
+        }.discoverRepositories(organizations)
     }
 
     fun discoverScope(): RepositoryDiscoveryResult {
@@ -3772,10 +3780,8 @@ private fun AboutRevqDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    Icon(
-                        painter = painterResource("icon-app.png"),
+                    AppBrandMark(
                         contentDescription = null,
-                        tint = Color.Unspecified,
                         modifier = Modifier.size(54.dp),
                     )
                     Column(Modifier.weight(1f)) {

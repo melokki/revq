@@ -55,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -234,7 +233,6 @@ fun SidebarPanel(
 
 @Composable
 private fun SidebarHeader() {
-    val logo = remember { loadPackagedImage("logo.png") }
     val headerHeight = 60.dp
 
     Row(
@@ -244,15 +242,7 @@ private fun SidebarHeader() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (logo != null) {
-            Image(
-                bitmap = logo,
-                contentDescription = "RevQ application icon",
-                modifier = Modifier.size(headerHeight),
-                contentScale = ContentScale.Fit,
-                filterQuality = FilterQuality.High,
-            )
-        }
+        AppBrandMark(modifier = Modifier.size(headerHeight))
 
         Column(
             verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -279,14 +269,6 @@ private fun PullRequest.matchesSidebarScope(scope: QueueScopeFilter): Boolean = 
     is QueueScopeFilter.Organization -> repository.owner == scope.owner
     is QueueScopeFilter.Repository -> repository.toString() == scope.nameWithOwner
 }
-
-private fun loadPackagedImage(resourceName: String): ImageBitmap? = runCatching {
-    val bytes = Thread.currentThread().contextClassLoader
-        .getResourceAsStream(resourceName)
-        ?.use { it.readBytes() }
-        ?: return null
-    SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
-}.getOrNull()
 
 @Composable
 private fun RepositoryScopeButton(
