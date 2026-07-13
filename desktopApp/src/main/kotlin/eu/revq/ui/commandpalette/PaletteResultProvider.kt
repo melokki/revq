@@ -85,6 +85,7 @@ object PaletteResultProvider {
                         CommandCategory.Review -> PaletteSection.Review
                         CommandCategory.Navigate -> PaletteSection.Views
                         CommandCategory.System -> PaletteSection.System
+                        CommandCategory.Updates -> PaletteSection.Updates
                     },
                     context = context,
                 )
@@ -277,6 +278,7 @@ object PaletteResultProvider {
                         CommandCategory.Review -> PaletteSection.Review
                         CommandCategory.Navigate -> PaletteSection.Views
                         CommandCategory.System -> PaletteSection.System
+                        CommandCategory.Updates -> PaletteSection.Updates
                     },
                     searchableText = buildString {
                         append("keyboard shortcuts help keys ")

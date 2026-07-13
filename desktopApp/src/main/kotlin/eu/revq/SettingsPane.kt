@@ -328,6 +328,12 @@ private fun GitHubSettings(state: AppState) {
 
     SettingsSectionLabel("CONNECTION")
     SettingsGroup {
+        state.githubIdentity?.let { identity ->
+            StaticSettingRow("Active account", identity.login)
+            SettingsDivider()
+            StaticSettingRow("GitHub host", identity.host)
+            SettingsDivider()
+        }
         ActionSettingRow(
             title = "Test connection",
             description = "Verify GitHub CLI, authentication, and access to GitHub.com.",
@@ -595,6 +601,29 @@ private fun TrackingSettings(state: AppState) {
         SettingsSectionLabel("DISCOVERED REPOSITORIES")
         SettingsGroup {
             DiscoveredTrackingSelection(state)
+        }
+    }
+
+    val scopeProblems = state.repositoryScopeHealth.filterValues { it != RepositoryHealth.Active }
+    if (scopeProblems.isNotEmpty()) {
+        SettingsSectionLabel("SCOPE HEALTH")
+        SettingsGroup {
+            scopeProblems.entries.sortedBy { it.key }.forEachIndexed { index, (repository, health) ->
+                val detail = when (health) {
+                    RepositoryHealth.Archived -> "Archived"
+                    RepositoryHealth.Inaccessible -> "Access unavailable"
+                    RepositoryHealth.Missing -> "Repository not found"
+                    is RepositoryHealth.Relocated -> "Now discovered as ${health.currentName}"
+                    RepositoryHealth.Active -> "Active"
+                }
+                ActionSettingRow(
+                    title = repository,
+                    description = detail,
+                    actionLabel = "Remove",
+                    onClick = { state.removeRepository(repository) },
+                )
+                if (index != scopeProblems.size - 1) SettingsDivider()
+            }
         }
     }
 
@@ -1029,6 +1058,46 @@ private fun DataSettings(state: AppState) {
         ) {
             SecondaryButton("Clear cache") { state.clearCache() }
             SecondaryButton("Clear reviewed state") { state.clearHandledReviews() }
+            SecondaryButton("Restart setup") { state.restartOnboarding() }
+        }
+    }
+
+    SettingsSectionLabel("UPDATES")
+    SettingsGroup {
+        StaticSettingRow("Current version", state.installedVersion.toString())
+        SettingsDivider()
+        StaticSettingRow(
+            "Latest version",
+            when (val update = state.updateState) {
+                is UpdateState.Available -> update.release.version.toString()
+                is UpdateState.Current -> update.latestRelease?.version?.toString() ?: "Not checked"
+                else -> state.updatePreferences.latestKnownVersion ?: "Not checked"
+            },
+        )
+        SettingsDivider()
+        StaticSettingRow(
+            "Last checked",
+            state.updatePreferences.lastSuccessfulCheck?.let(::relativeInstant) ?: "Never",
+        )
+        SettingsDivider()
+        StaticSettingRow(
+            "Automatic checks",
+            if (state.updatePreferences.automaticChecksEnabled) "On · daily at 09:00" else "Off",
+        )
+        SettingsDivider()
+        StaticSettingRow("Release channel", "Stable")
+        state.updatePreferences.dismissedVersion?.let { dismissed ->
+            SettingsDivider()
+            StaticSettingRow("Dismissed notification", "RevQ $dismissed")
+        }
+        SettingsDivider()
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SecondaryButton("Check now", enabled = state.updateState != UpdateState.Checking) {
+                state.checkForUpdates()
+            }
         }
     }
 

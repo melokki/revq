@@ -133,7 +133,9 @@ compose.desktop {
         jvmArgs += listOf(
             "--enable-native-access=ALL-UNNAMED",
             "-Dsun.stdout.encoding=UTF-8",
-            "-Dsun.stderr.encoding=UTF-8"
+            "-Dsun.stderr.encoding=UTF-8",
+            "-Drevq.app.version=$appVersion",
+            "-Drevq.repositoryUrl=https://codeberg.org/melokki/revq"
         )
     }
 }

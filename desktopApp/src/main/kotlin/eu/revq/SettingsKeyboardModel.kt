@@ -120,6 +120,7 @@ private fun settingsRows(section: SettingsSection): List<SettingsInteractionRow>
         SettingsInteractionRow("Clear reviewed state") {
             it.statusLine = "Use Tab to reach Clear reviewed state, then press Enter."
         },
+        SettingsInteractionRow("Restart setup", AppState::restartOnboarding),
         SettingsInteractionRow("Test connection", AppState::testGithubCli),
         SettingsInteractionRow("Copy diagnostics", AppState::copyDiagnostics),
         SettingsInteractionRow("Validate tracking", AppState::validateTrackingText),

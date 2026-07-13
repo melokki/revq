@@ -17,6 +17,7 @@ enum class PaletteSection(val label: String) {
     Management("Management"),
     Movement("Movement"),
     Application("Application"),
+    Updates("Updates"),
 }
 
 sealed interface PaletteResult {

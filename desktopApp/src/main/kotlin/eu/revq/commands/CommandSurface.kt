@@ -26,6 +26,15 @@ object CommandSurface {
                 add(CommandId.OpenSelectedRepository)
                 add(CommandId.ToggleMuteSelectedRepository)
             }
+            when (state.updateState) {
+                is eu.revq.UpdateState.Available -> {
+                    add(CommandId.InstallUpdate)
+                    add(CommandId.ViewReleaseNotes)
+                    add(CommandId.DismissUpdate)
+                }
+                is eu.revq.UpdateState.Downloading -> add(CommandId.CancelUpdateDownload)
+                else -> Unit
+            }
         }
 
         return ids

@@ -25,6 +25,14 @@ data class RevqSettings(
     val quietHours: String = "18:00-08:00",
     val remindOnlyWhenQueueNotClear: Boolean = true,
     val reminderSnoozeMinutes: String = "60",
+    val onboardingCompleted: Boolean = false,
+    val githubIdentityLogin: String = "",
+    val githubIdentityHost: String = "",
+    val dismissedUpdateVersion: String = "",
+    val latestKnownUpdateVersion: String = "",
+    val lastUpdateCheck: String = "",
+    val automaticUpdateChecksEnabled: Boolean = true,
+    val lastUpdateError: String = "",
 )
 
 interface SettingsStore {
@@ -65,6 +73,14 @@ class FileSettingsStore(
         quietHours = value("reminder-quiet-hours.txt", "18:00-08:00"),
         remindOnlyWhenQueueNotClear = boolean("reminder-only-when-queue.txt", true),
         reminderSnoozeMinutes = value("reminder-snooze-minutes.txt", "60"),
+        onboardingCompleted = boolean("onboarding-completed.txt", false),
+        githubIdentityLogin = value("github-identity-login.txt", ""),
+        githubIdentityHost = value("github-identity-host.txt", ""),
+        dismissedUpdateVersion = value("dismissed-update-version.txt", ""),
+        latestKnownUpdateVersion = value("latest-known-update-version.txt", ""),
+        lastUpdateCheck = value("last-update-check.txt", ""),
+        automaticUpdateChecksEnabled = boolean("automatic-update-checks-enabled.txt", true),
+        lastUpdateError = value("last-update-error.txt", ""),
     )
 
     override fun save(settings: RevqSettings) {
@@ -86,6 +102,14 @@ class FileSettingsStore(
         write("reminder-quiet-hours.txt", listOf(settings.quietHours))
         write("reminder-only-when-queue.txt", listOf(settings.remindOnlyWhenQueueNotClear.toString()))
         write("reminder-snooze-minutes.txt", listOf(settings.reminderSnoozeMinutes))
+        write("onboarding-completed.txt", listOf(settings.onboardingCompleted.toString()))
+        writeOptional("github-identity-login.txt", settings.githubIdentityLogin)
+        writeOptional("github-identity-host.txt", settings.githubIdentityHost)
+        writeOptional("dismissed-update-version.txt", settings.dismissedUpdateVersion)
+        writeOptional("latest-known-update-version.txt", settings.latestKnownUpdateVersion)
+        writeOptional("last-update-check.txt", settings.lastUpdateCheck)
+        write("automatic-update-checks-enabled.txt", listOf(settings.automaticUpdateChecksEnabled.toString()))
+        writeOptional("last-update-error.txt", settings.lastUpdateError)
     }
 
     private fun lines(name: String): List<String> =

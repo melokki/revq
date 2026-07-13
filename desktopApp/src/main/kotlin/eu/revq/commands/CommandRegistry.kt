@@ -3,6 +3,7 @@ package eu.revq.commands
 import eu.revq.AppState
 import eu.revq.PullRequestSource
 import eu.revq.View
+import eu.revq.UpdateState
 
 object CommandRegistry {
     private val commands: List<AppCommand> = listOf(
@@ -180,6 +181,46 @@ object CommandRegistry {
             category = CommandCategory.System,
             aliases = listOf("help", "keys", "shortcuts"),
         ),
+        AppCommand(
+            id = CommandId.InstallUpdate,
+            title = "Install RevQ update",
+            description = "Download, verify, install, and restart RevQ automatically.",
+            category = CommandCategory.Updates,
+            aliases = listOf("update", "install", "version", "upgrade"),
+            isEnabled = { it.updateState is UpdateState.Available },
+        ),
+        AppCommand(
+            id = CommandId.ViewReleaseNotes,
+            title = "View release notes",
+            category = CommandCategory.Updates,
+            aliases = listOf("update", "version", "what's new", "changelog"),
+            isEnabled = {
+                (it.updateState as? UpdateState.Available)?.release?.notes?.isNotBlank() == true
+            },
+        ),
+        AppCommand(
+            id = CommandId.DismissUpdate,
+            title = "Dismiss update",
+            category = CommandCategory.Updates,
+            aliases = listOf("update", "release", "version", "hide"),
+            isEnabled = {
+                (it.updateState as? UpdateState.Available)?.dismissed == false
+            },
+        ),
+        AppCommand(
+            id = CommandId.CancelUpdateDownload,
+            title = "Cancel update download",
+            category = CommandCategory.Updates,
+            aliases = listOf("update", "download", "cancel"),
+            isEnabled = { it.updateState is UpdateState.Downloading },
+        ),
+        AppCommand(
+            id = CommandId.CheckForUpdates,
+            title = "Check for updates",
+            category = CommandCategory.Updates,
+            aliases = listOf("update", "version", "release", "check now"),
+            isEnabled = { it.updateState != UpdateState.Checking },
+        ),
     )
 
     private val byId: Map<CommandId, AppCommand> = commands.associateBy { it.id }
@@ -232,6 +273,11 @@ object CommandRegistry {
             CommandId.PreviewReminder -> state.previewReminderWindow()
             CommandId.CopyDiagnostics -> state.copyDiagnostics()
             CommandId.ShowKeyboardShortcuts -> state.statusLine = "Use ? to open keyboard shortcuts"
+            CommandId.InstallUpdate -> state.downloadAndInstallUpdate()
+            CommandId.ViewReleaseNotes -> state.showUpdateReleaseNotes()
+            CommandId.DismissUpdate -> state.dismissUpdate()
+            CommandId.CancelUpdateDownload -> state.cancelUpdateDownload()
+            CommandId.CheckForUpdates -> state.checkForUpdates()
         }
 
         state.recordCommandExecution(commandId)

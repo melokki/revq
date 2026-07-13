@@ -36,6 +36,12 @@ class SettingsStoreTest {
             quietHours = "20:00-08:00",
             remindOnlyWhenQueueNotClear = false,
             reminderSnoozeMinutes = "120",
+            onboardingCompleted = true,
+            githubIdentityLogin = "bogdan",
+            githubIdentityHost = "github.com",
+            dismissedUpdateVersion = "0.2.0",
+            latestKnownUpdateVersion = "0.2.1",
+            lastUpdateCheck = "2026-07-13T06:00:00Z",
         )
 
         store.save(settings)

@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -117,6 +119,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
@@ -305,14 +308,18 @@ fun main() {
     configureJavaDesktopUiScale()
 
     application {
-        val appState = remember { AppState() }
+        val appState = remember {
+            AppState(applicationLifecycle = ApplicationLifecycle { exitApplication() })
+        }
         val mainWindowState = remember { WindowState(size = DpSize(1680.dp, 1040.dp), position = WindowPosition.Aligned(Alignment.Center)) }
 
         LaunchedEffect(Unit) {
             appState.loadFromDisk()
+            appState.startOnboarding()
             installBestEffortTray(appState)
             appState.startReminderScheduler()
             appState.startAutoRefreshScheduler()
+            appState.startUpdateScheduler()
             if (appState.repositoriesText.isNotBlank()) {
                 appState.refresh()
             } else {
@@ -344,7 +351,11 @@ fun main() {
                 onDispose { window.removeWindowListener(listener) }
             }
             RevqTheme(uiScale = appState.uiScale) {
-                RevqApp(appState)
+                when {
+                    !appState.applicationLoaded -> RevqLaunchScreen()
+                    appState.onboardingRequired -> OnboardingScreen(appState)
+                    else -> RevqApp(appState)
+                }
             }
         }
 
@@ -472,18 +483,32 @@ class AppState(
     private val configDirectory: Path = defaultRevqConfigDirectory(),
     private val repositoryCatalog: RepositoryCatalogGateway = GhClient,
     private val discoveryTimeoutMillis: Long = 30_000,
+    updateService: UpdateService? = null,
+    onboardingCoordinator: OnboardingCoordinator? = null,
+    applicationLifecycle: ApplicationLifecycle = ApplicationLifecycle {},
 ) {
     private val scope = MainScope()
     private val configDir: Path = configDirectory
     private val handledFile: Path = configDir.resolve("handled-reviews.txt")
     private val uiScaleFile: Path = configDir.resolve("ui-scale.txt")
-    private val cacheFile: Path = configDir.resolve("pull-requests-cache.tsv")
+    private val legacyCacheFile: Path = configDir.resolve("pull-requests-cache.tsv")
     private val pinnedFile: Path = configDir.resolve("pinned-prs.txt")
     private val reminderSnoozedUntilFile: Path = configDir.resolve("reminder-snoozed-until.txt")
     private val reminderDismissedDateFile: Path = configDir.resolve("reminder-dismissed-date.txt")
     private var reminderSchedulerJob: Job? = null
     private var autoRefreshJob: Job? = null
     private var refreshSummaryJob: Job? = null
+    private var updateSchedulerJob: Job? = null
+    private val updater: UpdateService = updateService ?: UpdateService(
+        installedVersion = AppVersion.parse(System.getProperty("revq.app.version", "0.1.0")),
+        releaseSource = CodebergReleaseSource(),
+        preferences = SettingsUpdatePreferencesStore(settingsStore),
+        downloader = HttpUpdateDownloadGateway(),
+        applicationLifecycle = ApplicationLifecycle {
+            scope.launch { applicationLifecycle.exitForUpdate() }
+        },
+    )
+    private var onboarding: OnboardingCoordinator? = onboardingCoordinator
     private var scheduledReminderPending = false
     private var sidebarNavigationHintShownThisSession = false
 
@@ -502,6 +527,8 @@ class AppState(
     var repositoryScopeSelection by mutableStateOf(RepositoryScopeSelection())
     var repositoryDiscoveryQuery by mutableStateOf("")
     var repositoryDiscoveryError by mutableStateOf<String?>(null)
+    var repositoryScopeHealth by mutableStateOf<Map<String, RepositoryHealth>>(emptyMap())
+        private set
 
     // Tracking discovery is intentionally separate from active tracking.
     // Discovery only populates choices; repositoriesText changes only after explicit apply.
@@ -558,6 +585,24 @@ class AppState(
     var recentCommandIds by mutableStateOf<List<CommandId>>(emptyList())
     var recentPaletteTargets by mutableStateOf<List<String>>(emptyList())
         private set
+    var updateState by mutableStateOf<UpdateState>(updater.state)
+        private set
+    var onboardingState by mutableStateOf(OnboardingState())
+        private set
+    var githubIdentity by mutableStateOf<GitHubIdentity?>(null)
+        private set
+    var applicationLoaded by mutableStateOf(false)
+        private set
+
+    init {
+        updater.observeState { value ->
+            scope.launch {
+                if (updater.state == value) {
+                    updateState = value
+                }
+            }
+        }
+    }
 
     // Keyboard-navigation state. Palette state is kept at the UI shell level.
     var keyboardMode by mutableStateOf(KeyboardMode.Normal)
@@ -572,7 +617,14 @@ class AppState(
 
     fun loadFromDisk() {
         Files.createDirectories(configDir)
-        val settings = settingsStore.load()
+        var settings = settingsStore.load()
+        if (!settings.onboardingCompleted && settings.repositories.isNotEmpty()) {
+            settings = settings.copy(onboardingCompleted = true)
+            settingsStore.save(settings)
+        }
+        githubIdentity = settings.githubIdentityLogin
+            .takeIf(String::isNotBlank)
+            ?.let { GitHubIdentity(it, settings.githubIdentityHost.ifBlank { "github.com" }) }
         repositoriesText = settings.repositories.joinToString("\n")
         organizationsText = settings.organizations.joinToString("\n")
         ghPathText = settings.githubExecutable
@@ -615,8 +667,173 @@ class AppState(
         groupByRepository = settings.groupByRepository
         staleThresholdDaysText = settings.staleThresholdDays
         compactRows = settings.compactRows
+        if (settings.onboardingCompleted) {
+            onboardingState = OnboardingState(
+                step = OnboardingStep.Complete,
+                dependency = GhDependencyState.Available,
+                identity = githubIdentity,
+            )
+        }
+        if (onboarding == null) {
+            onboarding = OnboardingCoordinator(
+                preflight = ResolvingGitHubPreflightGateway(
+                    resolveExecutable = {
+                        GhClient.detectExecutable() ?: ghPathText.takeIf(String::isNotBlank)
+                    },
+                ),
+                discovery = OnboardingDiscoveryGateway { GhClient.discoverScope() },
+                progressStore = SettingsOnboardingProgressStore(settingsStore),
+            )
+        }
         replacePullRequests(pullRequests)
+        applicationLoaded = true
     }
+
+    fun startOnboarding() {
+        val coordinator = onboarding ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) { coordinator.start() }
+            onboardingState = coordinator.state
+            githubIdentity = coordinator.state.identity
+        }
+    }
+
+    fun retryOnboarding() {
+        val coordinator = onboarding ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) { coordinator.retry() }
+            onboardingState = coordinator.state
+            githubIdentity = coordinator.state.identity
+        }
+    }
+
+    fun confirmOnboardingIdentity() {
+        val coordinator = onboarding ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) { coordinator.confirmIdentity() }
+            onboardingState = coordinator.state
+            githubIdentity = coordinator.state.identity
+        }
+    }
+
+    fun setOnboardingOrganizationScope(organization: String, selected: Boolean) {
+        val coordinator = onboarding ?: return
+        val selection = coordinator.state.selection.copy(
+            organizationScopes = coordinator.state.selection.organizationScopes +
+                    (organization to if (selected) OrganizationScope.All else OrganizationScope.Disabled),
+        )
+        coordinator.selectScope(selection)
+        onboardingState = coordinator.state
+    }
+
+    fun toggleOnboardingRepository(repository: String) {
+        val coordinator = onboarding ?: return
+        val selected = coordinator.state.selection.individualRepositories
+        coordinator.selectScope(
+            coordinator.state.selection.copy(
+                individualRepositories = if (repository in selected) selected - repository else selected + repository,
+            ),
+        )
+        onboardingState = coordinator.state
+    }
+
+    fun reviewOnboardingScope() {
+        val coordinator = onboarding ?: return
+        coordinator.reviewScope()
+        onboardingState = coordinator.state
+    }
+
+    fun backToOnboardingScope() {
+        val coordinator = onboarding ?: return
+        coordinator.backToScopeSelection()
+        onboardingState = coordinator.state
+    }
+
+    fun completeOnboarding() {
+        val coordinator = onboarding ?: return
+        coordinator.complete()
+        onboardingState = coordinator.state
+        val settings = settingsStore.load()
+        repositoriesText = settings.repositories.joinToString("\n")
+        organizationsText = settings.organizations.joinToString("\n")
+        githubIdentity = coordinator.state.identity
+        view = View.NeedsReview
+        if (repositoriesText.isNotBlank()) refresh()
+    }
+
+    fun restartOnboarding() {
+        val coordinator = onboarding ?: return
+        coordinator.restart()
+        onboardingState = coordinator.state
+    }
+
+    val onboardingRequired: Boolean
+        get() = onboardingState.step != OnboardingStep.Complete
+
+    suspend fun checkForUpdatesNow() {
+        updater.checkNow()
+        updateState = updater.state
+    }
+
+    fun checkForUpdates() {
+        if (updateState == UpdateState.Checking) return
+        scope.launch {
+            withContext(Dispatchers.IO) { checkForUpdatesNow() }
+        }
+    }
+
+    fun startUpdateScheduler() {
+        updateSchedulerJob?.cancel()
+        if (!updater.preferences().automaticChecksEnabled) return
+        updateSchedulerJob = scope.launch {
+            withContext(Dispatchers.IO) { checkForUpdatesNow() }
+            while (true) {
+                val now = ZonedDateTime.now()
+                val next = nextDailyUpdateCheck(now)
+                delay(Duration.between(now, next).toMillis().coerceAtLeast(1_000L))
+                withContext(Dispatchers.IO) { checkForUpdatesNow() }
+            }
+        }
+    }
+
+    fun dismissUpdate() {
+        updater.dismissAvailableUpdate()
+        updateState = updater.state
+    }
+
+    fun downloadAndInstallUpdate() {
+        scope.launch {
+            withContext(Dispatchers.IO) { updater.downloadAndInstallUpdate() }
+            updateState = updater.state
+        }
+    }
+
+    fun retryUpdateDownload() {
+        scope.launch {
+            withContext(Dispatchers.IO) { updater.retryDownload() }
+            updateState = updater.state
+        }
+    }
+
+    fun dismissUpdateFailure() {
+        updater.dismissFailure()
+        updateState = updater.state
+    }
+
+    fun cancelUpdateDownload() {
+        updater.cancelDownload()
+        updateState = updater.state
+    }
+
+    fun showUpdateReleaseNotes() {
+        showAboutDialog = true
+    }
+
+    val installedVersion: AppVersion
+        get() = updater.installedVersion
+
+    val updatePreferences: UpdatePreferences
+        get() = updater.preferences()
 
     fun saveConfig() {
         val ghPath = ghPathText.trim()
@@ -682,6 +899,12 @@ class AppState(
             }
             isTestingGh = false
             ghTestResult = result.value ?: result.error
+            result.value
+                ?.substringAfter("authenticated as ", "")
+                ?.substringBefore(" ·")
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+                ?.let { applyGitHubIdentity(GitHubIdentity(it)) }
             statusLine = result.value ?: "GitHub CLI test failed"
         }
     }
@@ -766,6 +989,7 @@ class AppState(
             }
         } else {
             val refreshed = result.value.orEmpty()
+            GhClient.activeIdentity()?.let(::applyGitHubIdentity)
             val previousByKey = pullRequests.associateBy { it.key }
 
             newPullRequestKeys = refreshed
@@ -880,6 +1104,15 @@ class AppState(
             }
 
             val currentlyTracked = parseLines(repositoriesText).toSet()
+            repositoryScopeHealth = validateRepositoryScope(
+                savedRepositories = currentlyTracked,
+                discoveredRepositories = discovered.map { repository ->
+                    DiscoveredRepository(
+                        nameWithOwner = repository,
+                        owner = repository.substringBefore('/'),
+                    )
+                },
+            )
             discoveredTrackingRepositories = (discovered + currentlyTracked)
                 .distinct()
                 .sorted()
@@ -944,6 +1177,10 @@ class AppState(
             isDiscovering = false
             result.onSuccess { discovered ->
                 repositoryDiscovery = discovered
+                repositoryScopeHealth = validateRepositoryScope(
+                    savedRepositories = parseLines(repositoriesText).toSet(),
+                    discoveredRepositories = discovered.repositories,
+                )
                 val existingOrganizations = parseLines(organizationsText)
                 repositoryScopeSelection = RepositoryScopeSelection(
                     organizationScopes = (
@@ -1404,7 +1641,8 @@ class AppState(
     fun clearCache() {
         pullRequests = emptyList()
         selectedPullRequest = null
-        Files.deleteIfExists(cacheFile)
+        Files.deleteIfExists(cacheFilePath())
+        Files.deleteIfExists(legacyCacheFile)
         statusLine = "Local PR cache cleared"
     }
 
@@ -1450,10 +1688,38 @@ class AppState(
 
     private fun saveCache() {
         Files.createDirectories(configDir)
-        cacheFile.writeLines(pullRequests.map(::serializePullRequest))
+        cacheFilePath().writeLines(pullRequests.map(::serializePullRequest))
     }
 
-    private fun loadCache(): List<PullRequest> = cacheFile.safeLines().mapNotNull(::deserializePullRequest)
+    private fun loadCache(): List<PullRequest> {
+        val scoped = cacheFilePath()
+        val source = if (scoped.exists()) scoped else legacyCacheFile
+        return source.safeLines().mapNotNull(::deserializePullRequest)
+    }
+
+    private fun cacheFilePath(): Path {
+        val identity = githubIdentity ?: return legacyCacheFile
+        val safeHost = identity.host.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val safeLogin = identity.login.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return configDir.resolve("pull-requests-cache-$safeHost-$safeLogin.tsv")
+    }
+
+    private fun applyGitHubIdentity(identity: GitHubIdentity) {
+        val previous = githubIdentity
+        if (previous != null && previous != identity) {
+            pullRequests = emptyList()
+            selectedPullRequest = null
+            expandedPullRequestKey = null
+            statusLine = "GitHub account changed · review repository scope"
+        }
+        githubIdentity = identity
+        settingsStore.save(
+            settingsStore.load().copy(
+                githubIdentityLogin = identity.login,
+                githubIdentityHost = identity.host,
+            ),
+        )
+    }
 
     fun startAutoRefreshScheduler() {
         autoRefreshJob?.cancel()
@@ -1566,7 +1832,7 @@ class AppState(
         reminderDismissedDate?.let { reminderDismissedDateFile.writeLines(listOf(it)) } ?: Files.deleteIfExists(reminderDismissedDateFile)
     }
 
-    private fun currentSettings(): RevqSettings = RevqSettings(
+    private fun currentSettings(): RevqSettings = settingsStore.load().copy(
         repositories = parseLines(repositoriesText),
         organizations = parseLines(organizationsText),
         githubExecutable = ghPathText.trim(),
@@ -1799,6 +2065,10 @@ fun currentDesktopPlatform(): DesktopPlatform {
 object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
     @Volatile
     private var configuredExecutable: String? = null
+    @Volatile
+    private var activeLogin: String? = null
+
+    fun activeIdentity(): GitHubIdentity? = activeLogin?.let(::GitHubIdentity)
 
     fun configureExecutable(path: String) {
         configuredExecutable = path.trim().ifBlank { null }
@@ -1940,9 +2210,13 @@ object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
         runGh("auth", "status", "-h", "github.com")
     }
 
-    private fun currentLogin(): String = runGh("api", "user", "--jq", ".login")
-        .trim()
-        .ifBlank { error("GitHub CLI did not return the current user login. Run `gh auth status` in a terminal.") }
+    private fun currentLogin(): String {
+        val login = runGh("api", "user", "--jq", ".login")
+            .trim()
+            .ifBlank { error("GitHub CLI did not return the current user login. Run `gh auth status` in a terminal.") }
+        activeLogin = login
+        return login
+    }
 
     private fun listPrs(
         repo: String,
@@ -2380,13 +2654,250 @@ object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
 
     private fun runCommandForSingleLine(command: List<String>): String? = runCommandForLines(command).firstOrNull()
 
-    private fun platformDetectionSummary(platform: DesktopPlatform): String = when (platform) {
+private fun platformDetectionSummary(platform: DesktopPlatform): String = when (platform) {
         DesktopPlatform.Linux -> "RevQ checked system PATH, executable lookup, login shells, Linuxbrew, Snap, and common user/system locations."
         DesktopPlatform.MacOS -> "RevQ checked system PATH, executable lookup, login shells, Homebrew, and common user/system locations."
         DesktopPlatform.Windows -> "RevQ checked system PATH, Windows executable lookup, Chocolatey, Scoop, and common per-user/system locations."
         DesktopPlatform.Unknown -> "RevQ checked the system PATH and common executable names."
-    }
+}
 
+}
+
+@Composable
+private fun RevqLaunchScreen() {
+    Surface(Modifier.fillMaxSize(), color = AppBg) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            AppBrandMark(contentDescription = "RevQ", modifier = Modifier.size(72.dp))
+        }
+    }
+}
+
+@Composable
+fun OnboardingScreen(state: AppState) {
+    val onboarding = state.onboardingState
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .semantics { contentDescription = "RevQ first-run setup: ${onboarding.step.name}" },
+        color = AppBg,
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Surface(
+                modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(24.dp),
+                color = PanelBg,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Border),
+            ) {
+                Column(
+                    modifier = Modifier.padding(28.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        AppBrandMark(contentDescription = null, modifier = Modifier.size(48.dp))
+                        Column {
+                            Text("Welcome to RevQ", color = TextPrimary, style = MaterialTheme.typography.titleLarge)
+                            Text("Connect GitHub and choose what RevQ should monitor.", color = TextMuted)
+                        }
+                    }
+                    Divider(color = Border)
+
+                    when (onboarding.step) {
+                        OnboardingStep.CheckingGitHubCli,
+                        OnboardingStep.CheckingAuthentication -> OnboardingChecking(onboarding.step)
+                        OnboardingStep.GitHubCliRequired -> {
+                            OnboardingMessage(
+                                title = "GitHub CLI is required",
+                                body = "RevQ uses GitHub CLI to discover repositories and retrieve pull request information. It was not found on this system.",
+                            )
+                            OnboardingActions {
+                                TextButton(onClick = { openUrl("https://cli.github.com/") }) {
+                                    Text("Installation instructions", color = TextMuted)
+                                }
+                                Button(onClick = state::retryOnboarding) { Text("Check again") }
+                            }
+                        }
+                        OnboardingStep.AuthenticationRequired -> {
+                            OnboardingMessage(
+                                title = "GitHub authentication needs attention",
+                                body = onboarding.message
+                                    ?: "Authenticate with GitHub CLI, then return here and check again.",
+                            )
+                            OnboardingActions {
+                                TextButton(onClick = { openUrl("https://cli.github.com/manual/gh_auth_login") }) {
+                                    Text("Authentication instructions", color = TextMuted)
+                                }
+                                Button(onClick = state::retryOnboarding) { Text("Check again") }
+                            }
+                        }
+                        OnboardingStep.ConfirmIdentity -> {
+                            val identity = (onboarding.authentication as? GhAuthState.Authenticated)?.identity
+                                ?: onboarding.identity
+                            OnboardingMessage(
+                                title = "Connected as",
+                                body = identity?.let { "${it.login}\n${it.host}" }
+                                    ?: "GitHub CLI is authenticated.",
+                            )
+                            OnboardingActions {
+                                Button(onClick = state::confirmOnboardingIdentity) { Text("Continue") }
+                            }
+                        }
+                        OnboardingStep.SelectScope -> OnboardingScopeSelection(state, onboarding)
+                        OnboardingStep.ReviewScope -> OnboardingScopeSummary(state, onboarding)
+                        OnboardingStep.Error -> {
+                            OnboardingMessage(
+                                title = "Setup needs attention",
+                                body = onboarding.message ?: "RevQ could not complete this setup step.",
+                            )
+                            OnboardingActions {
+                                Button(onClick = state::retryOnboarding) { Text("Try again") }
+                            }
+                        }
+                        OnboardingStep.Starting -> OnboardingChecking(onboarding.step)
+                        OnboardingStep.Complete -> Unit
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnboardingChecking(step: OnboardingStep) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        CircularProgressIndicator(Modifier.size(22.dp), color = Olive, strokeWidth = 2.dp)
+        Text(
+            if (step == OnboardingStep.CheckingAuthentication) "Checking GitHub authentication…" else "Looking for GitHub CLI…",
+            color = TextPrimary,
+        )
+    }
+}
+
+@Composable
+private fun OnboardingMessage(title: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, color = TextPrimary, style = MaterialTheme.typography.titleMedium)
+        Text(body, color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun OnboardingActions(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+private fun OnboardingScopeSelection(state: AppState, onboarding: OnboardingState) {
+    val discovery = onboarding.discovery
+    if (discovery == null) {
+        OnboardingMessage("No repository catalog", "Try repository discovery again.")
+        return
+    }
+    Text("Organizations & repositories", color = TextPrimary, style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Choose at least one scope. Archived repositories remain visible but cannot be selected.",
+        color = TextMuted,
+        style = MaterialTheme.typography.bodySmall,
+    )
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().height(390.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(discovery.organizations, key = { "org:${it.login}" }) { organization ->
+            val selected = onboarding.selection.organizationScopes[organization.login] == OrganizationScope.All
+            OnboardingChoiceRow(
+                title = organization.login,
+                detail = if (selected) "All repositories" else "Organization",
+                selected = selected,
+                enabled = true,
+                onClick = { state.setOnboardingOrganizationScope(organization.login, !selected) },
+            )
+        }
+        items(discovery.repositories, key = { "repo:${it.nameWithOwner}" }) { repository ->
+            val selected = repository.nameWithOwner in onboarding.selection.individualRepositories ||
+                    onboarding.selection.organizationScopes[repository.owner] == OrganizationScope.All
+            OnboardingChoiceRow(
+                title = repository.nameWithOwner,
+                detail = when {
+                    repository.archived -> "Archived"
+                    repository.private -> "Private repository"
+                    else -> "Repository"
+                },
+                selected = selected,
+                enabled = !repository.archived &&
+                        onboarding.selection.organizationScopes[repository.owner] != OrganizationScope.All,
+                onClick = { state.toggleOnboardingRepository(repository.nameWithOwner) },
+            )
+        }
+    }
+    onboarding.message?.let { Text(it, color = Amber, style = MaterialTheme.typography.bodySmall) }
+    OnboardingActions {
+        Button(onClick = state::reviewOnboardingScope) { Text("Continue") }
+    }
+}
+
+@Composable
+private fun OnboardingChoiceRow(
+    title: String,
+    detail: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Olive.copy(alpha = 0.10f) else PanelElevated)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            imageVector = if (selected) Icons.Rounded.CheckCircle else Icons.Rounded.Search,
+            contentDescription = if (selected) "Selected" else "Not selected",
+            tint = when {
+                !enabled && !selected -> TextMuted.copy(alpha = 0.45f)
+                selected -> Olive
+                else -> TextMuted
+            },
+            modifier = Modifier.size(19.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(title, color = if (enabled || selected) TextPrimary else TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(detail, color = TextMuted, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun OnboardingScopeSummary(state: AppState, onboarding: OnboardingState) {
+    val summary = onboarding.summary ?: return
+    OnboardingMessage(
+        title = "Ready to start",
+        body = "${summary.organizationCount} organizations selected\n${summary.activeRepositoryCount} active repositories",
+    )
+    Surface(color = PanelElevated, shape = RoundedCornerShape(12.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Needs Review", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+            Text("PRs requesting or requiring your review", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+            Text("My PRs", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+            Text("Open PRs authored by you within the selected scope", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    OnboardingActions {
+        TextButton(onClick = state::backToOnboardingScope) { Text("Back", color = TextMuted) }
+        Spacer(Modifier.width(8.dp))
+        Button(onClick = state::completeOnboarding) { Text("Start RevQ") }
+    }
 }
 
 
@@ -2542,6 +3053,7 @@ fun RevqApp(state: AppState) {
                         }
                     }
                 }
+                UpdateBanner(state)
                 BottomStatusBar(state, paletteState)
             }
 
@@ -3629,6 +4141,97 @@ private fun compactRefreshError(message: String): String {
 }
 
 @Composable
+fun UpdateBanner(state: AppState) {
+    val update = state.updateState
+    val visible = when (update) {
+        is UpdateState.Available -> !update.dismissed
+        is UpdateState.Downloading,
+        is UpdateState.Verifying,
+        is UpdateState.ReadyToInstall,
+        is UpdateState.Installing,
+        is UpdateState.Restarting -> true
+        is UpdateState.Failed -> update.visible
+        UpdateState.Idle,
+        UpdateState.Checking,
+        is UpdateState.Current -> false
+    }
+
+    AnimatedVisibility(visible = visible) {
+        Surface(
+            color = OliveSoft,
+            border = BorderStroke(1.dp, Olive.copy(alpha = 0.35f)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "RevQ update: ${update::class.simpleName}" }
+                    .padding(horizontal = 14.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = when (update) {
+                            is UpdateState.Available -> "RevQ ${update.release.version} is available"
+                            is UpdateState.Downloading -> "Downloading RevQ ${update.release.version}…"
+                            is UpdateState.Verifying -> "Verifying RevQ ${update.release.version}…"
+                            is UpdateState.ReadyToInstall -> "Preparing RevQ ${update.release.version} installation…"
+                            is UpdateState.Installing -> "Preparing RevQ ${update.release.version} installation…"
+                            is UpdateState.Restarting -> "Restarting RevQ…"
+                            is UpdateState.Failed -> update.message
+                            else -> ""
+                        },
+                        color = TextPrimary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (update is UpdateState.Downloading && update.progress != null) {
+                        LinearProgressIndicator(
+                            progress = { update.progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            color = Olive,
+                            trackColor = Border,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                when (update) {
+                    is UpdateState.Available -> {
+                        if (update.release.notes.isNotBlank()) {
+                            TextButton(onClick = state::showUpdateReleaseNotes) {
+                                Text("What's new", color = TextMuted)
+                            }
+                        }
+                        TextButton(onClick = state::downloadAndInstallUpdate) {
+                            Text("Download & install", color = Olive)
+                        }
+                        TextButton(onClick = state::dismissUpdate) {
+                            Text("Dismiss", color = TextMuted)
+                        }
+                    }
+                    is UpdateState.Downloading -> TextButton(onClick = state::cancelUpdateDownload) {
+                        Text("Cancel", color = TextMuted)
+                    }
+                    is UpdateState.Failed -> {
+                        if (update.release != null) {
+                            TextButton(onClick = state::retryUpdateDownload) {
+                                Text("Retry", color = Olive)
+                            }
+                        }
+                        TextButton(onClick = state::dismissUpdateFailure) {
+                            Text("Dismiss", color = TextMuted)
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun BottomStatusBar(
     state: AppState,
     paletteState: CommandPaletteState,
@@ -3751,14 +4354,7 @@ private fun AboutRevqDialog(
     state: AppState,
     onDismiss: () -> Unit,
 ) {
-    val version = (
-            System.getProperty("revq.version")
-                ?: System.getenv("REVQ_VERSION")
-            )
-        ?.takeIf { it.isNotBlank() }
-        ?: AppState::class.java.`package`?.implementationVersion
-            ?.takeIf { it.isNotBlank() }
-        ?: "Development build"
+    val version = state.installedVersion.toString()
     val repositoryUrl = (
             System.getProperty("revq.repositoryUrl")
                 ?: System.getenv("REVQ_REPOSITORY_URL")
@@ -3813,22 +4409,35 @@ private fun AboutRevqDialog(
                     style = MaterialTheme.typography.bodyMedium,
                 )
 
+                val available = state.updateState as? UpdateState.Available
+                if (available != null) {
+                    Text(
+                        text = "RevQ ${available.release.version} is available",
+                        color = Olive,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (available.release.notes.isNotBlank()) {
+                        Text(
+                            text = available.release.notes.take(600),
+                            color = TextMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 8,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(
-                        enabled = repositoryUrl != null,
-                        onClick = {
-                            repositoryUrl?.let { url ->
-                                openUrl(url.trimEnd('/') + "/releases")
-                            } ?: run {
-                                state.statusLine = "Repository URL is not configured"
-                            }
-                        },
+                        enabled = state.updateState != UpdateState.Checking,
+                        onClick = state::checkForUpdates,
                     ) {
-                        Text("Check for updates", color = if (repositoryUrl != null) Olive else TextMuted)
+                        Text("Check for updates", color = Olive)
                     }
                     Spacer(Modifier.width(4.dp))
                     TextButton(

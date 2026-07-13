@@ -27,4 +27,10 @@ enum class CommandId {
     PreviewReminder,
     CopyDiagnostics,
     ShowKeyboardShortcuts,
+
+    InstallUpdate,
+    ViewReleaseNotes,
+    DismissUpdate,
+    CancelUpdateDownload,
+    CheckForUpdates,
 }

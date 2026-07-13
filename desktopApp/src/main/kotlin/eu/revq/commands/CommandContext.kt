@@ -4,6 +4,7 @@ import eu.revq.AppState
 import eu.revq.PullRequest
 import eu.revq.View
 import eu.revq.keyboard.FocusRegion
+import eu.revq.UpdateState
 
 data class CommandContext(
     val view: View,
@@ -14,6 +15,7 @@ data class CommandContext(
     val isRefreshing: Boolean,
     val isDiscovering: Boolean,
     val isTestingGh: Boolean,
+    val updateState: UpdateState,
 ) {
     val hasSelectedPullRequest: Boolean
         get() = selectedPullRequest != null
@@ -28,6 +30,7 @@ data class CommandContext(
             isRefreshing = state.isRefreshing,
             isDiscovering = state.isDiscovering,
             isTestingGh = state.isTestingGh,
+            updateState = state.updateState,
         )
     }
 }

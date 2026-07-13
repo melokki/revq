@@ -46,6 +46,33 @@ data class RepositoryDiscoveryResult(
     val repositories: List<DiscoveredRepository>,
 )
 
+sealed interface RepositoryHealth {
+    data object Active : RepositoryHealth
+    data object Archived : RepositoryHealth
+    data object Inaccessible : RepositoryHealth
+    data object Missing : RepositoryHealth
+    data class Relocated(val currentName: String) : RepositoryHealth
+}
+
+fun validateRepositoryScope(
+    savedRepositories: Set<String>,
+    discoveredRepositories: List<DiscoveredRepository>,
+    inaccessibleRepositories: Set<String> = emptySet(),
+    relocatedRepositories: Map<String, String> = emptyMap(),
+): Map<String, RepositoryHealth> {
+    val discoveredByName = discoveredRepositories.associateBy { it.nameWithOwner }
+    return savedRepositories.associateWith { repository ->
+        val relocated = relocatedRepositories[repository]
+        when {
+            relocated != null && relocated in discoveredByName -> RepositoryHealth.Relocated(relocated)
+            discoveredByName[repository]?.archived == true -> RepositoryHealth.Archived
+            repository in discoveredByName -> RepositoryHealth.Active
+            repository in inaccessibleRepositories -> RepositoryHealth.Inaccessible
+            else -> RepositoryHealth.Missing
+        }
+    }
+}
+
 class GitHubRepositoryDiscovery(
     private val runCommand: (List<String>) -> String,
 ) : RepositoryCatalogGateway {

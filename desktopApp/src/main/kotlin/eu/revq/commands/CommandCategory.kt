@@ -4,4 +4,5 @@ enum class CommandCategory(val label: String) {
     Review("Review"),
     Navigate("Navigate"),
     System("System"),
+    Updates("Updates"),
 }
