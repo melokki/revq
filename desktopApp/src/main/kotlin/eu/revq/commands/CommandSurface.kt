@@ -19,6 +19,8 @@ object CommandSurface {
                 if (selected.source == PullRequestSource.ReviewRequest) {
                     add(CommandId.MarkSelectedReviewed)
                     add(CommandId.NextReview)
+                } else if (context.canMergeSelectedPullRequest) {
+                    add(CommandId.MarkSelectedReviewed)
                 }
                 add(CommandId.ToggleSelectedPrPin)
                 add(CommandId.CopySelectedPrUrl)

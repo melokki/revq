@@ -27,16 +27,22 @@ sealed interface PaletteResult {
     val shortcutLabel: String?
     val section: PaletteSection
     val enabled: Boolean
+    val actionable: Boolean get() = enabled
     val searchableText: String
+    val relevanceBoost: Int get() = 0
 
     data class CommandResult(
         val command: AppCommand,
         override val section: PaletteSection,
         override val enabled: Boolean,
         val disabledReason: String? = null,
+        val displayTitle: String = command.title,
+        val executionDescription: String? = null,
+        val confirmationPrompt: String? = null,
+        override val relevanceBoost: Int = 0,
     ) : PaletteResult {
         override val stableKey: String = "command:${command.id.name}:${section.name}"
-        override val title: String = command.title
+        override val title: String = displayTitle
         override val subtitle: String? = if (enabled) {
             command.description
         } else {
@@ -49,6 +55,8 @@ sealed interface PaletteResult {
         override val shortcutLabel: String? = command.shortcut?.displayLabel
         override val searchableText: String = buildString {
             append(command.title)
+            append(' ')
+            append(displayTitle)
             append(' ')
             append(command.description.orEmpty())
             append(' ')
@@ -127,6 +135,7 @@ sealed interface PaletteResult {
         override val searchableText: String,
     ) : PaletteResult {
         override val enabled: Boolean = true
+        override val actionable: Boolean = false
     }
 
     data object GoToTopResult : PaletteResult {
@@ -142,7 +151,7 @@ sealed interface PaletteResult {
 
 fun PaletteResult.executionPreview(): String = when (this) {
     is PaletteResult.CommandResult -> if (enabled) {
-        when (command.id) {
+        executionDescription ?: when (command.id) {
             CommandId.ToggleMuteSelectedRepository -> "Hide or restore the selected repository"
             CommandId.ToggleSelectedPrPin -> "Pin or unpin the selected pull request"
             CommandId.OpenSelectedPrInGitHub -> "Open the selected pull request in GitHub"

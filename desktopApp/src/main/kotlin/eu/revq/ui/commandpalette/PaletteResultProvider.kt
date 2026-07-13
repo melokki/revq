@@ -14,17 +14,29 @@ import eu.revq.commands.CommandRegistry
 import eu.revq.commands.CommandSurface
 
 object PaletteResultProvider {
+    fun catalog(
+        mode: PaletteMode,
+        state: AppState,
+    ): PaletteCatalog {
+        val blankResults = rawResults(mode, state, query = "")
+        val searchableResults = rawResults(mode, state, query = "catalog")
+        return PaletteCatalog(blankResults, searchableResults)
+    }
+
     fun results(
         mode: PaletteMode,
         state: AppState,
         query: String,
-    ): List<PaletteResult> {
-        val raw = when (mode) {
+    ): List<PaletteResult> = catalog(mode, state).results(query)
+
+    private fun rawResults(
+        mode: PaletteMode,
+        state: AppState,
+        query: String,
+    ): List<PaletteResult> = when (mode) {
             PaletteMode.Universal -> universalResults(state, query)
             PaletteMode.RepositoryScope -> repositoryScopeResults(state)
         }
-        return filterPaletteResults(raw, query)
-    }
 
     private fun universalResults(
         state: AppState,
@@ -71,6 +83,7 @@ object PaletteResultProvider {
 
     private fun commandResults(state: AppState): List<PaletteResult> {
         val context = CommandContext.from(state)
+        val recentIds = state.recentCommandIds.toSet()
         val contextual = contextActionResults(state)
         val contextualIds = contextual
             .mapNotNull { (it as? PaletteResult.CommandResult)?.command?.id }
@@ -88,6 +101,7 @@ object PaletteResultProvider {
                         CommandCategory.Updates -> PaletteSection.Updates
                     },
                     context = context,
+                    relevanceBoost = if (command.id in recentIds) -10 else 0,
                 )
             }
 
@@ -95,13 +109,14 @@ object PaletteResultProvider {
     }
 
     private fun contextActionResults(state: AppState): List<PaletteResult> {
+        val context = CommandContext.from(state)
         return CommandSurface.contextualCommands(state)
             .map { entry ->
-                PaletteResult.CommandResult(
+                commandResult(
                     command = entry.command,
                     section = PaletteSection.Actions,
-                    enabled = entry.enabled,
-                    disabledReason = entry.disabledReason,
+                    context = context,
+                    relevanceBoost = -20,
                 )
             }
     }
@@ -301,13 +316,35 @@ object PaletteResultProvider {
         command: eu.revq.commands.AppCommand,
         section: PaletteSection,
         context: CommandContext,
+        relevanceBoost: Int = 0,
     ): PaletteResult.CommandResult {
         val enabled = command.isEnabled(context)
+        val selected = context.selectedPullRequest
+        val primaryAction = if (command.id == CommandId.MarkSelectedReviewed && selected != null) {
+            if (selected.source == PullRequestSource.ReviewRequest) {
+                PrimaryActionPresentation(
+                    title = "Mark selected PR reviewed",
+                    preview = "Mark #${selected.number} reviewed and move to the next review",
+                )
+            } else {
+                PrimaryActionPresentation(
+                    title = "Merge selected PR",
+                    preview = "Merge ${selected.repository} #${selected.number}",
+                    confirmation = "Press Enter again to merge ${selected.repository} #${selected.number}",
+                )
+            }
+        } else {
+            null
+        }
         return PaletteResult.CommandResult(
             command = command,
             section = section,
             enabled = enabled,
             disabledReason = if (enabled) null else command.disabledReason(context),
+            displayTitle = primaryAction?.title ?: command.title,
+            executionDescription = primaryAction?.preview,
+            confirmationPrompt = primaryAction?.confirmation,
+            relevanceBoost = relevanceBoost,
         )
     }
 
@@ -326,3 +363,23 @@ object PaletteResultProvider {
         searchableText = "keyboard shortcuts help keys $title $subtitle $shortcut",
     )
 }
+
+class PaletteCatalog(
+    blankResults: List<PaletteResult>,
+    searchableResults: List<PaletteResult>,
+) {
+    private val blankResults = blankResults.toList()
+    private val searchableResults = searchableResults.toList()
+
+    fun results(query: String): List<PaletteResult> = if (query.isBlank()) {
+        blankResults
+    } else {
+        filterPaletteResults(searchableResults, query)
+    }
+}
+
+private data class PrimaryActionPresentation(
+    val title: String,
+    val preview: String,
+    val confirmation: String? = null,
+)

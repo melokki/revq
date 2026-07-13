@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,8 +53,21 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import eu.revq.AppState
@@ -76,23 +90,24 @@ fun CommandPalette(
     onGoToTop: () -> Unit,
 ) {
     val mode = paletteState.mode
-    val results = PaletteResultProvider.results(mode, state, paletteState.query)
+    val results = paletteState.results
     val listState = rememberLazyListState()
     val queryFocusRequester = remember { FocusRequester() }
     val paletteFocusRequester = remember { FocusRequester() }
-    val quickRunLabels = quickRunShortcutLabels(results)
-    val selectedResult = results.getOrNull(paletteState.selectedIndex)
+    val shortcutLabels = remember { paletteShortcutLabels() }
+    val quickRunLabels = quickRunShortcutLabels(results, shortcutLabels)
+    val selectedResult = paletteState.selectedResult
 
     LaunchedEffect(results.map { it.stableKey to it.enabled }) {
         paletteState.clampSelection(results.size)
-        if (results.isNotEmpty() && results.getOrNull(paletteState.selectedIndex)?.enabled == false) {
-            paletteState.selectedIndex = results.indexOfFirst { it.enabled }.coerceAtLeast(0)
+        if (results.isNotEmpty() && results.getOrNull(paletteState.selectedIndex)?.actionable == false) {
+            paletteState.selectedIndex = results.indexOfFirst { it.actionable }.coerceAtLeast(0)
         }
     }
 
     LaunchedEffect(paletteState.selectedIndex, results.size) {
         if (results.isNotEmpty()) {
-            listState.animateScrollToItem(paletteState.selectedIndex.coerceIn(results.indices))
+            listState.scrollToItem(paletteState.selectedIndex.coerceIn(results.indices))
         }
     }
 
@@ -105,7 +120,7 @@ fun CommandPalette(
     }
 
     fun execute(result: PaletteResult) {
-        if (!result.enabled) return
+        if (!result.actionable) return
 
         when (result) {
             is PaletteResult.CommandResult -> {
@@ -179,31 +194,39 @@ fun CommandPalette(
     }
 
     fun executeSelected() {
-        results.getOrNull(paletteState.selectedIndex)?.let(::execute)
+        results.getOrNull(paletteState.selectedIndex)?.let { result ->
+            if (paletteState.approveExecution(result)) execute(result)
+        }
+    }
+
+    fun approveAndExecute(result: PaletteResult) {
+        if (paletteState.approveExecution(result)) execute(result)
     }
 
     Dialog(onDismissRequest = paletteState::close) {
-        Surface(
-            modifier = Modifier
-                .width(800.dp)
-                .heightIn(max = 620.dp)
-                .focusRequester(paletteFocusRequester)
-                .focusable()
-                .onPreviewKeyEvent { event ->
-                    handlePaletteKeyEvent(
-                        event = event,
-                        mode = mode,
-                        results = results,
-                        paletteState = paletteState,
-                        onExecute = ::execute,
-                        onExecuteSelected = ::executeSelected,
-                    )
-                },
-            color = PanelBg,
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, Border),
-        ) {
-            Column {
+        BoxWithConstraints {
+            val dimensions = paletteDimensions(maxWidth, maxHeight)
+            Surface(
+                modifier = Modifier
+                    .width(dimensions.width)
+                    .heightIn(max = dimensions.maxHeight)
+                    .focusRequester(paletteFocusRequester)
+                    .focusable()
+                    .onPreviewKeyEvent { event ->
+                        handlePaletteKeyEvent(
+                            event = event,
+                            mode = mode,
+                            results = results,
+                            paletteState = paletteState,
+                            onExecute = ::approveAndExecute,
+                            onExecuteSelected = ::executeSelected,
+                        )
+                    },
+                color = PanelBg,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, Border),
+            ) {
+                Column {
                 PaletteHeader(mode)
 
                 if (mode.acceptsTextQuery) {
@@ -211,13 +234,15 @@ fun CommandPalette(
                         value = paletteState.query,
                         onValueChange = {
                             paletteState.query = it
-                            paletteState.selectedIndex = 0
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
                             .height(46.dp)
-                            .focusRequester(queryFocusRequester),
+                            .focusRequester(queryFocusRequester)
+                            .semantics {
+                                contentDescription = "Search ${mode.title.lowercase()}"
+                            },
                         singleLine = true,
                         placeholder = {
                             Text(mode.placeholder, color = TextMuted)
@@ -236,7 +261,9 @@ fun CommandPalette(
                     QuickModePrompt(mode)
                 }
 
-                Spacer(Modifier.size(10.dp))
+                PaletteResultSummary(
+                    summary = paletteResultSummary(results.size, paletteState.query),
+                )
                 HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
 
                 if (results.isEmpty()) {
@@ -262,7 +289,10 @@ fun CommandPalette(
                                     result = result,
                                     quickRunLabel = quickRunLabels[result.stableKey],
                                     selected = index == paletteState.selectedIndex,
-                                    onClick = { execute(result) },
+                                    onClick = { approveAndExecute(result) },
+                                    shortcutLabels = shortcutLabels,
+                                    query = paletteState.query,
+                                    showTypePill = paletteState.query.isNotBlank(),
                                 )
                             }
                         }
@@ -271,10 +301,15 @@ fun CommandPalette(
 
                 selectedResult?.let {
                     HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
-                    PaletteExecutionPreview(it)
+                    PaletteExecutionPreview(it, paletteState.confirmationMessage)
                 }
                 HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
-                PaletteFooter(mode)
+                PaletteFooter(
+                    mode = mode,
+                    confirming = paletteState.confirmationMessage != null,
+                    shortcutLabels = shortcutLabels,
+                )
+            }
             }
         }
     }
@@ -356,7 +391,22 @@ private fun PaletteSectionHeader(label: String) {
         color = TextMuted,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 5.dp),
+        modifier = Modifier
+            .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 5.dp)
+            .semantics { heading() },
+    )
+}
+
+@Composable
+private fun PaletteResultSummary(summary: String) {
+    Text(
+        text = summary,
+        color = TextMuted,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 9.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite },
     )
 }
 
@@ -366,8 +416,17 @@ private fun PaletteResultRow(
     quickRunLabel: String?,
     selected: Boolean,
     onClick: () -> Unit,
+    shortcutLabels: PaletteShortcutLabels,
+    query: String,
+    showTypePill: Boolean,
 ) {
     val icon = paletteResultIcon(result)
+    val accessibility = result.accessibility(selected)
+    val interactionModifier = if (result.actionable) {
+        Modifier.clickable(onClick = onClick)
+    } else {
+        Modifier
+    }
 
     Row(
         modifier = Modifier
@@ -375,7 +434,13 @@ private fun PaletteResultRow(
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (selected) PanelElevated else Color.Transparent)
-            .clickable(enabled = result.enabled, onClick = onClick)
+            .then(interactionModifier)
+            .semantics(mergeDescendants = true) {
+                contentDescription = accessibility.label
+                stateDescription = accessibility.stateDescription
+                this.selected = accessibility.selected
+                if (accessibility.button) role = Role.Button
+            }
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -405,9 +470,11 @@ private fun PaletteResultRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                ResultTypePill(result.typeLabel(), selected)
+                if (showTypePill) {
+                    ResultTypePill(result.typeLabel(), selected)
+                }
                 Text(
-                    text = result.title,
+                    text = highlightedPaletteText(result.title, query),
                     color = if (result.enabled) TextPrimary else TextMuted.copy(alpha = 0.45f),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
@@ -418,7 +485,7 @@ private fun PaletteResultRow(
             }
             result.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
                 Text(
-                    text = subtitle,
+                    text = highlightedPaletteText(subtitle, query),
                     color = TextMuted.copy(alpha = if (result.enabled) 1f else 0.45f),
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
@@ -432,8 +499,27 @@ private fun PaletteResultRow(
             QuickRunPill(shortcut, selected)
         } ?: result.shortcutLabel?.let { shortcut ->
             Spacer(Modifier.size(10.dp))
-            ShortcutPill(shortcut, selected)
+            ShortcutPill(shortcutLabels.localize(shortcut), selected)
         }
+    }
+}
+
+private fun highlightedPaletteText(
+    text: String,
+    query: String,
+): AnnotatedString {
+    val ranges = paletteMatchRanges(text, query)
+    if (ranges.isEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        var cursor = 0
+        ranges.forEach { range ->
+            if (cursor < range.first) append(text.substring(cursor, range.first))
+            withStyle(SpanStyle(color = Olive, fontWeight = FontWeight.Bold)) {
+                append(text.substring(range.first, range.last + 1))
+            }
+            cursor = range.last + 1
+        }
+        if (cursor < text.length) append(text.substring(cursor))
     }
 }
 
@@ -492,7 +578,10 @@ private fun ShortcutPill(
 }
 
 @Composable
-private fun PaletteExecutionPreview(result: PaletteResult) {
+private fun PaletteExecutionPreview(
+    result: PaletteResult,
+    confirmationMessage: String?,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -508,7 +597,7 @@ private fun PaletteExecutionPreview(result: PaletteResult) {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = result.executionPreview(),
+            text = confirmationMessage ?: result.executionPreview(),
             color = if (result.enabled) TextPrimary else TextMuted,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 1,
@@ -549,7 +638,11 @@ private fun PaletteEmptyState(
 }
 
 @Composable
-private fun PaletteFooter(mode: PaletteMode) {
+private fun PaletteFooter(
+    mode: PaletteMode,
+    confirming: Boolean,
+    shortcutLabels: PaletteShortcutLabels,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -558,11 +651,11 @@ private fun PaletteFooter(mode: PaletteMode) {
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         PaletteFooterHint("↑↓", "Move")
-        PaletteFooterHint("Ctrl+n/p", "Move")
-        PaletteFooterHint("Enter", "Run")
-        PaletteFooterHint("Ctrl+1…9", "Run")
+        PaletteFooterHint(shortcutLabels.moveAlternative, "Move")
+        PaletteFooterHint("Enter", if (confirming) "Confirm" else "Run")
+        PaletteFooterHint("${shortcutLabels.quickRun(1).dropLast(1)}1…9", "Run")
         if (mode.acceptsTextQuery) {
-            PaletteFooterHint("Ctrl+u", "Clear")
+            PaletteFooterHint(shortcutLabels.clear, "Clear")
         }
         Spacer(Modifier.weight(1f))
         PaletteFooterHint("Esc", "Close")
@@ -659,14 +752,17 @@ private fun handlePaletteKeyEvent(
     return false
 }
 
-internal fun quickRunShortcutLabels(results: List<PaletteResult>): Map<String, String> =
+internal fun quickRunShortcutLabels(
+    results: List<PaletteResult>,
+    shortcutLabels: PaletteShortcutLabels = paletteShortcutLabels(),
+): Map<String, String> =
     enabledVisibleResults(results)
         .take(9)
-        .mapIndexed { index, result -> result.stableKey to "Ctrl+${index + 1}" }
+        .mapIndexed { index, result -> result.stableKey to shortcutLabels.quickRun(index + 1) }
         .toMap()
 
 private fun enabledVisibleResults(results: List<PaletteResult>): List<PaletteResult> =
-    results.filter { it.enabled }
+    results.filter { it.actionable }
 
 private fun quickRunIndex(event: KeyEvent): Int? {
     val primary = event.isCtrlPressed || event.isMetaPressed
@@ -693,7 +789,7 @@ private fun nextEnabledIndex(
     direction: Int,
 ): Int {
     if (results.isEmpty()) return 0
-    val enabledIndices = results.indices.filter { results[it].enabled }
+    val enabledIndices = results.indices.filter { results[it].actionable }
     if (enabledIndices.isEmpty()) return currentIndex.coerceIn(results.indices)
 
     return if (direction > 0) {

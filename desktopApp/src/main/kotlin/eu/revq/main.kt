@@ -2978,7 +2978,7 @@ fun RevqApp(state: AppState) {
                 state.statusLine = "Settings saved"
             }
 
-            KeyboardAction.OpenPalette -> paletteState.open()
+            KeyboardAction.OpenPalette -> paletteState.open(state)
             KeyboardAction.CloseCommandPalette -> {
                 paletteState.close()
                 rootFocusRequester.requestFocus()
@@ -3021,7 +3021,7 @@ fun RevqApp(state: AppState) {
                         SidebarPanel(
                             state = state,
                             onOpenRepositoryScope = {
-                                paletteState.open(PaletteMode.RepositoryScope)
+                                paletteState.open(state, PaletteMode.RepositoryScope)
                             },
                         )
                     }
@@ -4292,7 +4292,7 @@ fun BottomStatusBar(
         NavigationFooterHints(state)
         Spacer(Modifier.width(10.dp))
 
-        TextButton(onClick = { paletteState.open() }) {
+        TextButton(onClick = { paletteState.open(state) }) {
             Icon(
                 imageVector = Icons.Rounded.KeyboardCommandKey,
                 contentDescription = null,

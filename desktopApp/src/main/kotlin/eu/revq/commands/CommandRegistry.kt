@@ -18,6 +18,14 @@ object CommandRegistry {
                 it.selectedPullRequest?.source == PullRequestSource.ReviewRequest ||
                         it.canMergeSelectedPullRequest
             },
+            disabledReason = {
+                when {
+                    it.selectedPullRequest == null -> "Select a pull request first."
+                    it.selectedPullRequest.source == PullRequestSource.Mine ->
+                        "Selected PR is not ready to merge."
+                    else -> null
+                }
+            },
         ),
         AppCommand(
             id = CommandId.NextReview,
