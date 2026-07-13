@@ -1,5 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.gradle.api.tasks.testing.Test
+import java.util.concurrent.TimeUnit
 
 plugins {
     alias(libs.plugins.kotlinJvm)
@@ -102,6 +103,7 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Exe)
+            modules("java.net.http")
             packageName = "RevQ"
             packageVersion = packageBaseVersion
 
@@ -148,6 +150,54 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<org.jetbr
 
 tasks.withType<JavaExec> {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
+val smokeTestLauncher = providers.gradleProperty("smokeTestLauncher")
+
+tasks.register("verifyDistributableStarts") {
+    group = "verification"
+    description = "Launches the packaged application and verifies startup has no JVM linkage failures."
+    if (!smokeTestLauncher.isPresent) {
+        dependsOn("createDistributable")
+    }
+
+    doLast {
+        val appImageDirectory = layout.buildDirectory.dir("compose/binaries/main/app").get().asFile
+        val osName = System.getProperty("os.name").lowercase()
+        val launcher = smokeTestLauncher.orNull?.let(project::file) ?: when {
+            osName.contains("mac") -> appImageDirectory.resolve("RevQ.app/Contents/MacOS/RevQ")
+            osName.contains("win") -> appImageDirectory.resolve("RevQ/RevQ.exe")
+            else -> appImageDirectory.resolve("RevQ/bin/RevQ")
+        }
+        check(launcher.isFile) {
+            "Packaged application launcher was not found at ${launcher.absolutePath}."
+        }
+
+        val launcherOutput = temporaryDir.resolve("launcher-output.txt")
+        val process = ProcessBuilder(launcher.absolutePath)
+            .redirectErrorStream(true)
+            .redirectOutput(launcherOutput)
+            .start()
+
+        val exitedDuringStartup = process.waitFor(5, TimeUnit.SECONDS)
+        if (!exitedDuringStartup) {
+            process.destroy()
+            if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                process.waitFor()
+            }
+        }
+
+        val output = launcherOutput.takeIf { it.isFile }?.readText().orEmpty()
+        val jvmError = Regex("""java\.lang\.[A-Za-z0-9_]+Error\b""")
+        val missingClass = "java.lang.ClassNotFoundException"
+        check(!jvmError.containsMatchIn(output) && missingClass !in output) {
+            "Packaged application reported a JVM linkage error during startup.\n$output"
+        }
+        check(!exitedDuringStartup) {
+            "Packaged application exited during startup with code ${process.exitValue()}.\n$output"
+        }
+    }
 }
 
 val isolatedTestHome = layout.buildDirectory.dir("test-user-home")

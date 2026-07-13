@@ -99,6 +99,25 @@ jobs:
             --stacktrace \
             --no-configuration-cache
 
+      - name: Smoke test packaged Linux application
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          DEB_FILE="$(find desktopApp/build/compose/binaries -type f -name '*.deb' | head -n 1)"
+          test -n "$DEB_FILE"
+          EXTRACT_DIR="$RUNNER_TEMP/revq-deb-smoke"
+          mkdir -p "$EXTRACT_DIR"
+          dpkg-deb -x "$DEB_FILE" "$EXTRACT_DIR"
+          LAUNCHER="$EXTRACT_DIR/opt/revq/bin/RevQ"
+          test -x "$LAUNCHER"
+          xvfb-run -a ./gradlew :desktopApp:verifyDistributableStarts \
+            -PappVersion="$VERSION" \
+            -PsmokeTestLauncher="$LAUNCHER" \
+            --no-daemon \
+            --stacktrace \
+            --no-configuration-cache
+
       - name: Collect DEB
         shell: bash
         run: |
@@ -229,6 +248,26 @@ jobs:
           fi
 
           exit "$BUILD_EXIT_CODE"
+
+      - name: Smoke test packaged macOS application
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG_FILE="$(find desktopApp/build/compose/binaries -type f -name '*.dmg' | head -n 1)"
+          test -n "$DMG_FILE"
+          MOUNT_POINT="$RUNNER_TEMP/revq-dmg-smoke"
+          mkdir -p "$MOUNT_POINT"
+          hdiutil attach "$DMG_FILE" -mountpoint "$MOUNT_POINT" -nobrowse -readonly
+          trap 'hdiutil detach "$MOUNT_POINT" -force' EXIT
+          LAUNCHER="$(find "$MOUNT_POINT" -type f -path '*/Contents/MacOS/RevQ' | head -n 1)"
+          test -x "$LAUNCHER"
+          ./gradlew :desktopApp:verifyDistributableStarts \
+            -PappVersion="$VERSION" \
+            -PsmokeTestLauncher="$LAUNCHER" \
+            --no-daemon \
+            --stacktrace \
+            --no-configuration-cache
 
       - name: Upload DMG diagnostics
         if: failure()
