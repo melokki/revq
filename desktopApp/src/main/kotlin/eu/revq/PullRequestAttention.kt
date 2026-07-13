@@ -30,6 +30,30 @@ data class PullRequestAttentionDescription(
     val needsAction: Boolean,
     val canMerge: Boolean,
     val nextAction: String,
+    val presentation: PullRequestPresentation,
+    val ownStatusPresentations: List<OwnPullRequestStatusPresentation>,
+)
+
+data class PullRequestPresentation(
+    val statusTitle: String,
+    val statusBody: String,
+    val rowStatus: String,
+    val selectedContext: List<String>,
+    val recommendationTitle: String = statusTitle,
+    val recommendationBody: String = statusBody,
+    val keyboardAction: PullRequestKeyboardAction? = null,
+)
+
+data class PullRequestKeyboardAction(
+    val key: String,
+    val label: String,
+)
+
+data class OwnPullRequestStatusPresentation(
+    val status: OwnPullRequestStatus,
+    val title: String,
+    val body: String,
+    val rowStatus: String,
 )
 
 object PullRequestAttention {
@@ -41,33 +65,166 @@ object PullRequestAttention {
         val ownStatus = ownStatuses.firstOrNull()
         val kind = attentionKind(pullRequest, ownStatus)
         val canMerge = isReadyToMerge(pullRequest)
+        val primaryReason = when {
+            pullRequest.source == PullRequestSource.ReviewRequest -> when (pullRequest.reviewRequestKind) {
+                ReviewRequestKind.Team -> AttentionReason.TeamReviewRequest
+                ReviewRequestKind.Assignment -> AttentionReason.Assignment
+                ReviewRequestKind.Direct,
+                null -> AttentionReason.DirectReviewRequest
+            }
+            ownStatus == OwnPullRequestStatus.ChangesRequested ->
+                AttentionReason.ChangesRequested
+            ownStatus == OwnPullRequestStatus.ChecksFailing ->
+                AttentionReason.FailingCi
+            else -> AttentionReason.Other
+        }
+        val nextAction = nextAction(
+            pullRequest = pullRequest,
+            ownStatus = ownStatus,
+            handled = handledMarker == pullRequest.updatedMarker,
+            canMerge = canMerge,
+        )
+        val ownStatusPresentations = ownStatuses.map { status ->
+            OwnPullRequestStatusPresentation(
+                status = status,
+                title = statusTitle(status),
+                body = statusBody(status, pullRequest),
+                rowStatus = rowStatus(pullRequest, status),
+            )
+        }
+        val primaryStatusPresentation = ownStatusPresentations.firstOrNull()
 
         return PullRequestAttentionDescription(
-            primaryReason = when {
-                pullRequest.source == PullRequestSource.ReviewRequest -> when (pullRequest.reviewRequestKind) {
-                    ReviewRequestKind.Team -> AttentionReason.TeamReviewRequest
-                    ReviewRequestKind.Assignment -> AttentionReason.Assignment
-                    ReviewRequestKind.Direct,
-                    null -> AttentionReason.DirectReviewRequest
-                }
-                ownStatus == OwnPullRequestStatus.ChangesRequested ->
-                    AttentionReason.ChangesRequested
-                ownStatus == OwnPullRequestStatus.ChecksFailing ->
-                    AttentionReason.FailingCi
-                else -> AttentionReason.Other
-            },
+            primaryReason = primaryReason,
             ownStatuses = ownStatuses,
             ownStatus = ownStatus,
             kind = kind,
             needsAction = kind == AttentionKind.Action || kind == AttentionKind.Blocked,
             canMerge = canMerge,
-            nextAction = nextAction(
-                pullRequest = pullRequest,
-                ownStatus = ownStatus,
-                handled = handledMarker == pullRequest.updatedMarker,
-                canMerge = canMerge,
+            nextAction = nextAction,
+            presentation = PullRequestPresentation(
+                statusTitle = primaryStatusPresentation?.title ?: primaryReason.label,
+                statusBody = primaryStatusPresentation?.body ?: nextAction,
+                rowStatus = primaryStatusPresentation?.rowStatus ?: primaryReason.label,
+                selectedContext = selectedContext(pullRequest),
+                recommendationTitle = primaryStatusPresentation?.title ?: "Review this pull request",
+                recommendationBody = primaryStatusPresentation?.body
+                    ?: "Open the diff, check the changes, and leave an approval, comment, or change request.",
+                keyboardAction = when {
+                    pullRequest.source == PullRequestSource.ReviewRequest ->
+                        PullRequestKeyboardAction("m", "Mark reviewed & next")
+                    kind in setOf(AttentionKind.Action, AttentionKind.Blocked) ->
+                        PullRequestKeyboardAction("o", "Open PR")
+                    else -> null
+                },
             ),
+            ownStatusPresentations = ownStatusPresentations,
         )
+    }
+
+    private fun selectedContext(pullRequest: PullRequest): List<String> = buildList {
+        when {
+            pullRequest.checksFailing > 0 -> add("${pullRequest.checksFailing} CI failing")
+            pullRequest.checksPending > 0 -> add("${pullRequest.checksPending} CI pending")
+            pullRequest.checksTotal > 0 -> add("CI passing")
+        }
+        pullRequest.approvingReviewers
+            .distinct()
+            .size
+            .takeIf { it > 0 }
+            ?.let { count -> add(if (count == 1) "1 approval" else "$count approvals") }
+    }
+
+    private fun rowStatus(
+        pullRequest: PullRequest,
+        status: OwnPullRequestStatus,
+    ): String = when (status) {
+        OwnPullRequestStatus.ChangesRequested ->
+            formatIdentityList(pullRequest.changeRequestReviewers, maxVisible = 1)
+                ?.let { "Changes requested by $it" }
+                ?: statusTitle(status)
+
+        OwnPullRequestStatus.WaitingForReviewer ->
+            formatIdentityList(pullRequest.requestedReviewers, maxVisible = 2)
+                ?.let { "Waiting on $it" }
+                ?: statusTitle(status)
+
+        OwnPullRequestStatus.ApprovedAndReady ->
+            formatIdentityList(pullRequest.approvingReviewers, maxVisible = 2)
+                ?.let { "Approved by $it" }
+                ?: statusTitle(status)
+
+        OwnPullRequestStatus.DiscussionNeedsResponse ->
+            formatIdentityList(pullRequest.unresolvedDiscussionAuthors, maxVisible = 1)
+                ?.let { "Open discussion with $it" }
+                ?: statusTitle(status)
+
+        else -> statusTitle(status)
+    }
+
+    private fun statusTitle(status: OwnPullRequestStatus): String = when (status) {
+        OwnPullRequestStatus.Draft -> "Draft"
+        OwnPullRequestStatus.ChangesRequested -> "Changes requested"
+        OwnPullRequestStatus.MergeConflict -> "Merge conflict"
+        OwnPullRequestStatus.ChecksFailing -> "Checks failing"
+        OwnPullRequestStatus.DiscussionNeedsResponse -> "Discussion needs response"
+        OwnPullRequestStatus.ApprovedAndReady -> "Approved and ready"
+        OwnPullRequestStatus.WaitingForReviewer -> "Waiting for reviewer"
+        OwnPullRequestStatus.NoActionNeeded -> "No action needed"
+    }
+
+    private fun statusBody(
+        status: OwnPullRequestStatus,
+        pullRequest: PullRequest,
+    ): String = when (status) {
+        OwnPullRequestStatus.Draft ->
+            "This pull request is still a draft. Keep working on it, or mark it ready for review when the change is ready."
+
+        OwnPullRequestStatus.ChangesRequested -> {
+            val reviewers = formatIdentityList(pullRequest.changeRequestReviewers)
+            if (reviewers != null) {
+                "$reviewers requested changes. Review the feedback and update the pull request before it can move forward."
+            } else {
+                "A reviewer requested changes. Review the feedback and update the pull request before it can move forward."
+            }
+        }
+
+        OwnPullRequestStatus.MergeConflict ->
+            "GitHub reports that this pull request cannot merge cleanly. Update the branch and resolve the merge conflict."
+
+        OwnPullRequestStatus.ChecksFailing ->
+            "${pullRequest.checksFailing} ${if (pullRequest.checksFailing == 1) "check is" else "checks are"} failing. Open GitHub to inspect the failures and decide what needs to change."
+
+        OwnPullRequestStatus.DiscussionNeedsResponse -> {
+            val count = pullRequest.unresolvedDiscussionCount ?: 0
+            val authors = formatIdentityList(pullRequest.unresolvedDiscussionAuthors)
+            buildString {
+                append("$count ${if (count == 1) "review discussion is" else "review discussions are"} still unresolved.")
+                if (authors != null) append(" Open ${if (count == 1) "thread involves" else "threads involve"} $authors.")
+                append(" Open the review threads and respond or resolve them as appropriate.")
+            }
+        }
+
+        OwnPullRequestStatus.ApprovedAndReady -> {
+            val reviewers = formatIdentityList(pullRequest.approvingReviewers)
+            if (reviewers != null) {
+                "Approved by $reviewers. Checks are clear and no merge conflict is detected. It looks ready to move forward."
+            } else {
+                "The pull request is approved, checks are clear, and no merge conflict is detected. It looks ready to move forward."
+            }
+        }
+
+        OwnPullRequestStatus.WaitingForReviewer -> {
+            val reviewers = formatIdentityList(pullRequest.requestedReviewers)
+            if (reviewers != null) {
+                "Waiting on $reviewers. No action is required from you right now; RevQ will keep tracking the pull request for new activity."
+            } else {
+                "No action is required from you right now. The pull request is open and waiting for review."
+            }
+        }
+
+        OwnPullRequestStatus.NoActionNeeded ->
+            "RevQ found no current signal that requires your attention. You can leave this pull request alone for now."
     }
 
     private fun attentionKind(

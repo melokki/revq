@@ -352,13 +352,14 @@ private fun compactReviewRequestSignals(
 private fun compactOwnPullRequestSignals(
     pr: PullRequest,
 ): List<CompactBriefSignal> {
-    val status = ownPullRequestPrimaryStatus(pr)
+    val attention = PullRequestAttention.describe(pr)
+    val status = attention.ownStatus ?: OwnPullRequestStatus.NoActionNeeded
     val peopleSignal = compactOwnPeopleSignal(status, pr)
 
     return listOfNotNull(
         CompactBriefSignal(
             label = "ATTENTION",
-            value = ownPullRequestStatusTitle(status),
+            value = attention.presentation.statusTitle,
             tone = toneForOwnStatus(status),
         ),
         peopleSignal,
@@ -546,13 +547,14 @@ private fun compactNextActionColor(
     }
 
     return colorForOwnPullRequestStatus(
-        ownPullRequestPrimaryStatus(pr),
+        PullRequestAttention.describe(pr).ownStatus ?: OwnPullRequestStatus.NoActionNeeded,
     )
 }
 
 @Composable
 private fun OwnPullRequestHero(pr: PullRequest) {
-    val status = ownPullRequestPrimaryStatus(pr)
+    val attention = PullRequestAttention.describe(pr)
+    val status = attention.ownStatus ?: OwnPullRequestStatus.NoActionNeeded
     val label = when (status) {
         OwnPullRequestStatus.ChangesRequested,
         OwnPullRequestStatus.MergeConflict,
@@ -567,15 +569,15 @@ private fun OwnPullRequestHero(pr: PullRequest) {
 
     InsightHeroCard(
         label = label,
-        title = ownPullRequestStatusTitle(status),
-        detail = ownPullRequestStatusBody(status, pr),
+        title = attention.presentation.statusTitle,
+        detail = attention.presentation.statusBody,
         accent = colorForOwnPullRequestStatus(status),
     )
 }
 
 @Composable
 private fun OwnPullRequestSignals(pr: PullRequest) {
-    val signals = ownPullRequestSignals(pr)
+    val signals = PullRequestAttention.describe(pr).ownStatusPresentations
 
     Column(
         modifier = Modifier
@@ -587,10 +589,10 @@ private fun OwnPullRequestSignals(pr: PullRequest) {
     ) {
         SectionLabel("SIGNALS")
 
-        signals.forEach { status ->
+        signals.forEach { presentation ->
             BriefStatusItem(
-                tone = toneForOwnStatus(status),
-                text = ownPullRequestRowStatus(pr, status),
+                tone = toneForOwnStatus(presentation.status),
+                text = presentation.rowStatus,
             )
         }
     }

@@ -3,9 +3,8 @@ package eu.revq.ui.commandpalette
 import eu.revq.AppState
 import eu.revq.PullRequest
 import eu.revq.PullRequestSource
+import eu.revq.PullRequestAttention
 import eu.revq.View
-import eu.revq.ownPullRequestPrimaryStatus
-import eu.revq.ownPullRequestStatusTitle
 import eu.revq.parseLines
 import eu.revq.commands.CommandCategory
 import eu.revq.commands.CommandContext
@@ -132,7 +131,7 @@ object PaletteResultProvider {
     ): PaletteResult.PullRequestResult {
         val status = when (pr.source) {
             PullRequestSource.ReviewRequest -> "Needs your review"
-            PullRequestSource.Mine -> ownPullRequestStatusTitle(ownPullRequestPrimaryStatus(pr))
+            PullRequestSource.Mine -> PullRequestAttention.describe(pr).presentation.statusTitle
         }
 
         val identities = buildList {

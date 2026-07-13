@@ -8,13 +8,15 @@ import kotlin.test.assertFalse
 class AppStateDiscoveryTest {
     @Test
     fun discoveringConfiguredOrganizationPublishesRepositories() {
-        val catalog = object : RepositoryCatalogGateway {
-            override fun discoverRepositories(organizations: List<String>): List<String> {
+        val integration = GitHubIntegration(
+            DeterministicGitHubIntegrationAdapter(
+                discoverRepositories = { organizations ->
                 assertEquals(listOf("acme"), organizations)
-                return listOf("acme/mobile", "acme/server")
-            }
-        }
-        val state = AppState(repositoryCatalog = catalog).apply {
+                    listOf("acme/mobile", "acme/server")
+                },
+            ),
+        )
+        val state = AppState(githubIntegration = integration).apply {
             organizationsText = "acme"
         }
 
@@ -32,14 +34,16 @@ class AppStateDiscoveryTest {
     @Test
     fun stalledDiscoveryStopsWithUsefulRetryState() {
         val neverCompletes = CountDownLatch(1)
-        val catalog = object : RepositoryCatalogGateway {
-            override fun discoverRepositories(organizations: List<String>): List<String> {
+        val integration = GitHubIntegration(
+            DeterministicGitHubIntegrationAdapter(
+                discoverRepositories = {
                 neverCompletes.await()
-                return emptyList()
-            }
-        }
+                    emptyList()
+                },
+            ),
+        )
         val state = AppState(
-            repositoryCatalog = catalog,
+            githubIntegration = integration,
             discoveryTimeoutMillis = 50,
         ).apply {
             organizationsText = "acme"
@@ -59,13 +63,15 @@ class AppStateDiscoveryTest {
     @Test
     fun startingDiscoveryClearsStaleRefreshErrorSoProgressIsVisible() {
         val releaseDiscovery = CountDownLatch(1)
-        val catalog = object : RepositoryCatalogGateway {
-            override fun discoverRepositories(organizations: List<String>): List<String> {
+        val integration = GitHubIntegration(
+            DeterministicGitHubIntegrationAdapter(
+                discoverRepositories = {
                 releaseDiscovery.await()
-                return emptyList()
-            }
-        }
-        val state = AppState(repositoryCatalog = catalog).apply {
+                    emptyList()
+                },
+            ),
+        )
+        val state = AppState(githubIntegration = integration).apply {
             organizationsText = "acme"
             lastRefreshError = "Previous refresh failed"
         }

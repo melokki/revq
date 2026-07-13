@@ -1,9 +1,5 @@
 package eu.revq
 
-import java.io.FileNotFoundException
-import java.io.IOException
-import java.util.concurrent.TimeUnit
-
 sealed interface GhDependencyState {
     data object Checking : GhDependencyState
     data object Missing : GhDependencyState
@@ -125,102 +121,6 @@ class SettingsOnboardingProgressStore(
             ),
         )
     }
-}
-
-data class CommandResult(
-    val exitCode: Int,
-    val output: String,
-)
-
-fun interface CommandExecutor {
-    suspend fun run(command: List<String>): CommandResult
-}
-
-class ProcessGitHubPreflightGateway(
-    private val executable: String = "gh",
-    private val execute: CommandExecutor = CommandExecutor(::executeCommand),
-) : GitHubPreflightGateway {
-    override suspend fun checkDependency(): GhDependencyResult = try {
-        val result = execute.run(listOf(executable, "--version"))
-        if (result.exitCode == 0) GhDependencyResult.Available
-        else GhDependencyResult.Error("GitHub CLI was found but could not be run.")
-    } catch (_: FileNotFoundException) {
-        GhDependencyResult.Missing
-    } catch (error: IOException) {
-        if (error.message.orEmpty().contains("No such file", ignoreCase = true) ||
-            error.message.orEmpty().contains("cannot find", ignoreCase = true)
-        ) {
-            GhDependencyResult.Missing
-        } else {
-            GhDependencyResult.Error("GitHub CLI could not be started.")
-        }
-    } catch (_: Throwable) {
-        GhDependencyResult.Error("GitHub CLI could not be checked.")
-    }
-
-    override suspend fun checkAuthentication(): GhAuthenticationResult = try {
-        val result = execute.run(
-            listOf(executable, "auth", "status", "--active", "--json", "hosts"),
-        )
-        if (result.exitCode != 0) {
-            GhAuthenticationResult.NotAuthenticated
-        } else {
-            parseActiveIdentity(result.output)
-                ?.let(GhAuthenticationResult::Authenticated)
-                ?: GhAuthenticationResult.Invalid("GitHub CLI has no active authenticated account.")
-        }
-    } catch (_: Throwable) {
-        GhAuthenticationResult.Error("GitHub authentication could not be checked.")
-    }
-}
-
-class ResolvingGitHubPreflightGateway(
-    private val resolveExecutable: () -> String?,
-    private val execute: CommandExecutor = CommandExecutor(::executeCommand),
-) : GitHubPreflightGateway {
-    private var resolvedExecutable: String? = null
-
-    override suspend fun checkDependency(): GhDependencyResult {
-        val executable = resolveExecutable()
-        if (executable.isNullOrBlank()) {
-            resolvedExecutable = null
-            return GhDependencyResult.Missing
-        }
-        val result = ProcessGitHubPreflightGateway(executable, execute).checkDependency()
-        resolvedExecutable = executable.takeIf { result == GhDependencyResult.Available }
-        return result
-    }
-
-    override suspend fun checkAuthentication(): GhAuthenticationResult {
-        val executable = resolvedExecutable ?: resolveExecutable()
-            ?: return GhAuthenticationResult.Error("GitHub CLI is not available.")
-        return ProcessGitHubPreflightGateway(executable, execute).checkAuthentication()
-    }
-}
-
-private fun parseActiveIdentity(output: String): GitHubIdentity? {
-    val host = Regex("\"hosts\"\\s*:\\s*\\{\\s*\"([^\"]+)\"")
-        .find(output)?.groupValues?.getOrNull(1) ?: return null
-    val activeAccount = Regex(
-        "\\{[^{}]*\"active\"\\s*:\\s*true[^{}]*\"login\"\\s*:\\s*\"([^\"]+)\"[^{}]*}",
-    ).find(output) ?: Regex(
-        "\\{[^{}]*\"login\"\\s*:\\s*\"([^\"]+)\"[^{}]*\"active\"\\s*:\\s*true[^{}]*}",
-    ).find(output)
-    val login = activeAccount?.groupValues?.getOrNull(1) ?: return null
-    return GitHubIdentity(login, host)
-}
-
-private fun executeCommand(command: List<String>): CommandResult {
-    val process = ProcessBuilder(command)
-        .redirectErrorStream(true)
-        .start()
-    val finished = process.waitFor(15, TimeUnit.SECONDS)
-    if (!finished) {
-        process.destroyForcibly()
-        return CommandResult(124, "")
-    }
-    val output = process.inputStream.bufferedReader().use { it.readText() }
-    return CommandResult(process.exitValue(), output)
 }
 
 enum class OnboardingStep {

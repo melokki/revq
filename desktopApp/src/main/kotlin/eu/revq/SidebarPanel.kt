@@ -67,9 +67,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.skia.Image as SkiaImage
-import java.io.File
 import java.net.URL
-import java.util.concurrent.TimeUnit
 import eu.revq.keyboard.FocusRegion
 import eu.revq.keyboard.KeyboardMode
 
@@ -78,13 +76,6 @@ private val SidebarOliveSoft = Color(0xFF2C3323)
 private val SidebarRoseSoft = Color(0xFF3B2427)
 private val SidebarNeutralBadge = Color(0xFF2A2F36)
 private val SidebarDanger = Color(0xFFE06A6A)
-
-private data class GitHubProfile(
-    val login: String,
-    val name: String?,
-    val avatarUrl: String?,
-    val profileUrl: String,
-)
 
 @Composable
 fun SidebarPanel(
@@ -100,7 +91,7 @@ fun SidebarPanel(
         profileError = null
 
         val result = withContext(Dispatchers.IO) {
-            runCatching { loadGitHubProfile(state.ghPathText) }
+            runCatching { state.loadGitHubProfile() }
         }
 
         githubProfile = result.getOrNull()
@@ -971,78 +962,6 @@ private fun StatusDot(color: Color) {
             .background(color),
     )
 }
-
-private fun loadGitHubProfile(configuredGhPath: String): GitHubProfile {
-    val executable = resolveSidebarGhExecutable(configuredGhPath)
-    val jq = "[.login, (.name // \"\"), (.avatar_url // \"\"), (.html_url // \"\")] | @tsv"
-    val command = listOf(executable, "api", "user", "--jq", jq)
-
-    val process = ProcessBuilder(command)
-        .redirectErrorStream(true)
-        .start()
-
-    val output = process.inputStream.bufferedReader().readText().trim()
-    val finished = process.waitFor(10, TimeUnit.SECONDS)
-
-    if (!finished) {
-        process.destroyForcibly()
-        error("GitHub profile lookup timed out")
-    }
-
-    if (process.exitValue() != 0) {
-        error(output.ifBlank { "GitHub profile lookup failed" })
-    }
-
-    val parts = output.split('\t', limit = 4)
-    val login = parts.getOrNull(0).orEmpty().trim()
-    if (login.isBlank()) error("GitHub CLI did not return an account login")
-
-    return GitHubProfile(
-        login = login,
-        name = parts.getOrNull(1)?.trim()?.ifBlank { null },
-        avatarUrl = parts.getOrNull(2)?.trim()?.ifBlank { null },
-        profileUrl = parts.getOrNull(3)?.trim()?.ifBlank { null }
-            ?: "https://github.com/$login",
-    )
-}
-
-private fun resolveSidebarGhExecutable(configuredGhPath: String): String {
-    val configured = configuredGhPath.trim()
-    if (configured.isNotBlank() && canRunSidebarGh(configured)) return configured
-
-    val home = System.getProperty("user.home")
-    val pathCandidates = System.getenv("PATH")
-        .orEmpty()
-        .split(File.pathSeparator)
-        .filter { it.isNotBlank() }
-        .flatMap { dir -> listOf("$dir/gh", "$dir/gh.exe") }
-
-    val candidates = (
-            pathCandidates + listOf(
-                "gh",
-                "/opt/homebrew/bin/gh",
-                "/opt/homebrew/opt/gh/bin/gh",
-                "/usr/local/bin/gh",
-                "/usr/local/opt/gh/bin/gh",
-                "/usr/bin/gh",
-                "/home/linuxbrew/.linuxbrew/bin/gh",
-                "/home/linuxbrew/.linuxbrew/opt/gh/bin/gh",
-                "/snap/bin/gh",
-                "/var/lib/snapd/snap/bin/gh",
-                "$home/.local/bin/gh",
-                "$home/bin/gh",
-            )
-            ).distinct()
-
-    return candidates.firstOrNull(::canRunSidebarGh) ?: configured.ifBlank { "gh" }
-}
-
-private fun canRunSidebarGh(candidate: String): Boolean = runCatching {
-    val process = ProcessBuilder(candidate, "--version")
-        .redirectErrorStream(true)
-        .start()
-    process.waitFor(5, TimeUnit.SECONDS) && process.exitValue() == 0
-}.getOrDefault(false)
 
 private fun loadAvatarBitmap(url: String): ImageBitmap {
     val bytes = URL(url).openStream().use { it.readBytes() }

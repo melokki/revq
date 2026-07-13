@@ -145,29 +145,20 @@ fun moveSettingsSection(
     state: AppState,
     delta: Int,
 ) {
-    state.settingsSectionIndex = (state.settingsSectionIndex + delta)
-        .coerceIn(SettingsSection.entries.indices)
-    clampSettingsRow(state)
+    state.applySettingsAction(SettingsAction.MoveSection(delta))
 }
 
 fun moveSettingsRow(
     state: AppState,
     delta: Int,
 ) {
-    val labels = settingsRowLabels(currentSettingsSection(state))
-    state.settingsFocusedRowIndex = (state.settingsFocusedRowIndex + delta)
-        .coerceIn(labels.indices)
+    state.applySettingsAction(SettingsAction.MoveRow(delta))
 }
 
 fun activateFocusedSettingsRow(state: AppState) {
     settingsRows(currentSettingsSection(state))
         .getOrNull(state.settingsFocusedRowIndex)
         ?.activate(state)
-}
-
-private fun clampSettingsRow(state: AppState) {
-    val labels = settingsRowLabels(currentSettingsSection(state))
-    state.settingsFocusedRowIndex = state.settingsFocusedRowIndex.coerceIn(labels.indices)
 }
 
 private fun cycleValue(

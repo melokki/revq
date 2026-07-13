@@ -1,10 +1,9 @@
 package eu.revq.keyboard
 
 import eu.revq.AppState
-import eu.revq.AttentionKind
+import eu.revq.PullRequestAttention
 import eu.revq.PullRequestSource
 import eu.revq.View
-import eu.revq.attentionKind
 
 data class KeyboardHint(
     val key: String,
@@ -80,19 +79,10 @@ fun keyboardHints(
 fun nextKeyboardAction(state: AppState): KeyboardHint? {
     val selected = state.selectedPullRequest
     if (selected != null) {
-        return when {
-            selected.source == PullRequestSource.ReviewRequest -> {
-                KeyboardHint("m", "Mark reviewed & next")
-            }
-
-            attentionKind(selected) in setOf(AttentionKind.Action, AttentionKind.Blocked) ||
-                    selected.checksFailing > 0 -> {
-                KeyboardHint("o", "Open PR")
-            }
-
-            state.isPinned(selected) -> KeyboardHint("p", "Unpin PR")
-            else -> KeyboardHint("p", "Pin PR")
+        PullRequestAttention.describe(selected).presentation.keyboardAction?.let { action ->
+            return KeyboardHint(action.key, action.label)
         }
+        return if (state.isPinned(selected)) KeyboardHint("p", "Unpin PR") else KeyboardHint("p", "Pin PR")
     }
 
     return null

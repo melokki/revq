@@ -106,8 +106,6 @@ import java.awt.Toolkit
 import java.awt.TrayIcon
 import java.awt.datatransfer.StringSelection
 import java.awt.image.BufferedImage
-import java.awt.event.WindowAdapter
-import java.awt.event.WindowEvent
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -343,27 +341,24 @@ fun main() {
             title = "RevQ",
             icon = appBrandPainter(),
         ) {
-            fun applyMainWindowFocus(trigger: MainWindowFocusTrigger) {
-                mainWindowFocusActions(trigger).forEach { action ->
-                    when (action) {
-                        MainWindowFocusAction.BringToFront -> window.toFront()
-                        MainWindowFocusAction.RequestNativeFocus -> window.requestFocus()
-                        MainWindowFocusAction.RequestComposeRootFocus -> appState.mainWindowFocusRequest += 1
-                    }
-                }
+            val focusLifecycle = remember(window) {
+                DesktopFocusLifecycle(
+                    AwtDesktopFocusAdapter(window) {
+                        appState.mainWindowFocusRequest += 1
+                    },
+                )
             }
 
-            DisposableEffect(window) {
-                val listener = object : WindowAdapter() {
-                    override fun windowActivated(event: WindowEvent?) {
-                        applyMainWindowFocus(MainWindowFocusTrigger.WindowActivated)
-                    }
-                }
-                window.addWindowListener(listener)
-                onDispose { window.removeWindowListener(listener) }
+            DisposableEffect(focusLifecycle) {
+                focusLifecycle.attach()
+                onDispose(focusLifecycle::close)
+            }
+            LaunchedEffect(appState.mainWindowVisible) {
+                focusLifecycle.apply(
+                    DesktopFocusEvent.VisibilityChanged(appState.mainWindowVisible),
+                )
             }
             LaunchedEffect(
-                window,
                 appState.applicationLoaded,
                 appState.onboardingRequired,
                 appState.mainWindowVisible,
@@ -373,9 +368,11 @@ fun main() {
                     !appState.onboardingRequired &&
                     appState.mainWindowVisible
                 ) {
-                    delay(75)
-                    applyMainWindowFocus(MainWindowFocusTrigger.ContentReady)
+                    focusLifecycle.apply(DesktopFocusEvent.ContentReady)
                 }
+            }
+            LaunchedEffect(Unit) {
+                focusLifecycle.apply(DesktopFocusEvent.HotReload)
             }
             RevqTheme(uiScale = appState.uiScale) {
                 when {
@@ -505,16 +502,26 @@ data class RefreshDelta(
 }
 
 class AppState(
-    private val pullRequestIntake: PullRequestIntake = PullRequestIntake(GhClient),
+    private val githubIntegration: GitHubIntegration = GitHubIntegration(ProcessGitHubIntegrationAdapter()),
     private val settingsStore: SettingsStore = FileSettingsStore(),
     private val configDirectory: Path = defaultRevqConfigDirectory(),
-    private val repositoryCatalog: RepositoryCatalogGateway = GhClient,
     private val discoveryTimeoutMillis: Long = 30_000,
     updateService: UpdateService? = null,
     onboardingCoordinator: OnboardingCoordinator? = null,
     applicationLifecycle: ApplicationLifecycle = ApplicationLifecycle {},
 ) {
     private val scope = MainScope()
+    private val pullRequestIntake = PullRequestIntake(githubIntegration)
+    private val repositoryCatalog: RepositoryCatalogGateway = githubIntegration
+    private val reviewWorkspace = ReviewWorkspace()
+    private val settingsWorkflow = SettingsWorkflow(
+        store = settingsStore,
+        runtime = SettingsRuntimeEffects { _, current ->
+            githubIntegration.configureExecutable(current.githubExecutable)
+            startReminderScheduler()
+            startAutoRefreshScheduler()
+        },
+    )
     private val configDir: Path = configDirectory
     private val handledFile: Path = configDir.resolve("handled-reviews.txt")
     private val uiScaleFile: Path = configDir.resolve("ui-scale.txt")
@@ -539,15 +546,41 @@ class AppState(
     private var scheduledReminderPending = false
     private var sidebarNavigationHintShownThisSession = false
 
-    var view by mutableStateOf(View.NeedsReview)
-    var searchQuery by mutableStateOf("")
-    var repositoriesText by mutableStateOf("")
-    var organizationsText by mutableStateOf("")
-    var ghPathText by mutableStateOf("")
-    var pullRequests by mutableStateOf(emptyList<PullRequest>())
-    var selectedPullRequest by mutableStateOf<PullRequest?>(null)
-    var expandedPullRequestKey by mutableStateOf<String?>(null)
-    var handledReviewRecords by mutableStateOf(emptyMap<String, String>())
+    var view: View
+        get() = reviewWorkspace.snapshot.view
+        set(value) {
+            reviewWorkspace.apply(WorkspaceAction.SelectView(value))
+        }
+    var searchQuery: String
+        get() = reviewWorkspace.snapshot.configuration.searchQuery
+        set(value) = updateQueueConfiguration { copy(searchQuery = value) }
+    var repositoriesText: String
+        get() = settingsWorkflow.snapshot.draft.repositories.joinToString("\n")
+        set(value) = updateSettingsDraft { copy(repositories = parseLines(value)) }
+    var organizationsText: String
+        get() = settingsWorkflow.snapshot.draft.organizations.joinToString("\n")
+        set(value) = updateSettingsDraft { copy(organizations = parseLines(value)) }
+    var ghPathText: String
+        get() = settingsWorkflow.snapshot.draft.githubExecutable
+        set(value) = updateSettingsDraft { copy(githubExecutable = value) }
+    var pullRequests: List<PullRequest>
+        get() = reviewWorkspace.snapshot.pullRequests
+        set(value) {
+            reviewWorkspace.apply(WorkspaceAction.ReplacePullRequests(value))
+        }
+    var selectedPullRequest: PullRequest?
+        get() = reviewWorkspace.snapshot.selectedPullRequest
+        set(value) {
+            reviewWorkspace.apply(WorkspaceAction.SelectPullRequest(value))
+        }
+    var expandedPullRequestKey: String?
+        get() = reviewWorkspace.snapshot.expandedPullRequestKey
+        set(value) {
+            reviewWorkspace.apply(WorkspaceAction.SetExpandedPullRequest(value))
+        }
+    var handledReviewRecords: Map<String, String>
+        get() = reviewWorkspace.snapshot.configuration.handledReviewRecords
+        set(value) = updateQueueConfiguration { copy(handledReviewRecords = value) }
     var isRefreshing by mutableStateOf(false)
     var isDiscovering by mutableStateOf(false)
     var repositoryDiscovery by mutableStateOf<RepositoryDiscoveryResult?>(null)
@@ -568,7 +601,9 @@ class AppState(
     var showReminderWindow by mutableStateOf(false)
     var isTestingGh by mutableStateOf(false)
     var ghTestResult by mutableStateOf<String?>(null)
-    var ghDetectionSource by mutableStateOf("Not detected")
+    var ghDetectionSource: String
+        get() = settingsWorkflow.snapshot.draft.githubDetectionSource
+        set(value) = updateSettingsDraft { copy(githubDetectionSource = value) }
     var refreshPhase by mutableStateOf("Idle")
     var refreshDone by mutableStateOf(0)
     var refreshTotal by mutableStateOf(0)
@@ -576,12 +611,24 @@ class AppState(
     var mainWindowVisible by mutableStateOf(true)
     var trayAvailable by mutableStateOf(false)
     var mainWindowFocusRequest by mutableStateOf(0)
-    var reminderEnabled by mutableStateOf(true)
-    var reminderTimeText by mutableStateOf("09:00")
-    var reminderDaysText by mutableStateOf("Mon-Fri")
-    var quietHoursText by mutableStateOf("18:00-08:00")
-    var remindOnlyWhenQueueNotClear by mutableStateOf(true)
-    var reminderSnoozeMinutesText by mutableStateOf("60")
+    var reminderEnabled: Boolean
+        get() = settingsWorkflow.snapshot.draft.reminderEnabled
+        set(value) = updateSettingsDraft { copy(reminderEnabled = value) }
+    var reminderTimeText: String
+        get() = settingsWorkflow.snapshot.draft.reminderTime
+        set(value) = updateSettingsDraft { copy(reminderTime = value) }
+    var reminderDaysText: String
+        get() = settingsWorkflow.snapshot.draft.reminderDays
+        set(value) = updateSettingsDraft { copy(reminderDays = value) }
+    var quietHoursText: String
+        get() = settingsWorkflow.snapshot.draft.quietHours
+        set(value) = updateSettingsDraft { copy(quietHours = value) }
+    var remindOnlyWhenQueueNotClear: Boolean
+        get() = settingsWorkflow.snapshot.draft.remindOnlyWhenQueueNotClear
+        set(value) = updateSettingsDraft { copy(remindOnlyWhenQueueNotClear = value) }
+    var reminderSnoozeMinutesText: String
+        get() = settingsWorkflow.snapshot.draft.reminderSnoozeMinutes
+        set(value) = updateSettingsDraft { copy(reminderSnoozeMinutes = value) }
     var reminderSnoozedUntil by mutableStateOf<Instant?>(null)
     var reminderDismissedDate by mutableStateOf<String?>(null)
     var nextReminderAt by mutableStateOf<Instant?>(null)
@@ -589,14 +636,40 @@ class AppState(
     var reminderWindowIsPreview by mutableStateOf(false)
     var uiScale by mutableStateOf(1.0f)
     var densityMode by mutableStateOf("OS automatic")
-    var pinnedPrKeys by mutableStateOf(emptySet<String>())
-    var mutedRepositoriesText by mutableStateOf("")
-    var autoRefreshEnabled by mutableStateOf(true)
-    var autoRefreshIntervalMinutesText by mutableStateOf("5")
-    var sortMode by mutableStateOf("Urgency")
-    var groupByRepository by mutableStateOf(false)
-    var staleThresholdDaysText by mutableStateOf("2")
-    var compactRows by mutableStateOf(false)
+    var pinnedPrKeys: Set<String>
+        get() = reviewWorkspace.snapshot.configuration.pinnedPullRequestKeys
+        set(value) = updateQueueConfiguration { copy(pinnedPullRequestKeys = value) }
+    var mutedRepositoriesText: String
+        get() = reviewWorkspace.snapshot.configuration.mutedRepositories.joinToString("\n")
+        set(value) {
+            val repositories = parseLines(value)
+            updateQueueConfiguration { copy(mutedRepositories = repositories.toSet()) }
+            updateSettingsDraft { copy(mutedRepositories = repositories) }
+        }
+    var autoRefreshEnabled: Boolean
+        get() = settingsWorkflow.snapshot.draft.autoRefreshEnabled
+        set(value) = updateSettingsDraft { copy(autoRefreshEnabled = value) }
+    var autoRefreshIntervalMinutesText: String
+        get() = settingsWorkflow.snapshot.draft.autoRefreshIntervalMinutes
+        set(value) = updateSettingsDraft { copy(autoRefreshIntervalMinutes = value) }
+    var sortMode: String
+        get() = reviewWorkspace.snapshot.configuration.sortMode
+        set(value) {
+            updateQueueConfiguration { copy(sortMode = value) }
+            updateSettingsDraft { copy(sortMode = value) }
+        }
+    var groupByRepository: Boolean
+        get() = settingsWorkflow.snapshot.draft.groupByRepository
+        set(value) = updateSettingsDraft { copy(groupByRepository = value) }
+    var staleThresholdDaysText: String
+        get() = reviewWorkspace.snapshot.configuration.staleThresholdDaysText
+        set(value) {
+            updateQueueConfiguration { copy(staleThresholdDaysText = value) }
+            updateSettingsDraft { copy(staleThresholdDays = value) }
+        }
+    var compactRows: Boolean
+        get() = settingsWorkflow.snapshot.draft.compactRows
+        set(value) = updateSettingsDraft { copy(compactRows = value) }
     var diagnosticsText by mutableStateOf("")
     var displayDiagnostics by mutableStateOf("Display metrics not captured yet")
     var actionFeedback by mutableStateOf<ActionFeedback?>(null)
@@ -633,21 +706,79 @@ class AppState(
 
     // Keyboard-navigation state. Palette state is kept at the UI shell level.
     var keyboardMode by mutableStateOf(KeyboardMode.Normal)
-    var keyboardFocusRegion by mutableStateOf(FocusRegion.PullRequestList)
-    var sidebarKeyboardView by mutableStateOf(View.NeedsReview)
+    var keyboardFocusRegion: FocusRegion
+        get() = reviewWorkspace.snapshot.focusRegion
+        set(value) {
+            reviewWorkspace.apply(WorkspaceAction.SetFocus(value))
+        }
+    var sidebarKeyboardView: View
+        get() = reviewWorkspace.snapshot.sidebarView
+        set(value) {
+            reviewWorkspace.apply(WorkspaceAction.HighlightSidebar(value))
+        }
     var keyboardPageStep by mutableStateOf(6)
-    var settingsSectionIndex by mutableStateOf(0)
-    var settingsFocusedRowIndex by mutableStateOf(0)
-    private var queueSelectionKeys by mutableStateOf<Map<View, String>>(emptyMap())
+    var settingsSectionIndex: Int
+        get() = settingsWorkflow.snapshot.section.ordinal
+        set(value) {
+            val section = SettingsSection.entries[value.coerceIn(SettingsSection.entries.indices)]
+            settingsWorkflow.apply(SettingsAction.SelectSection(section))
+        }
+    var settingsFocusedRowIndex: Int
+        get() = settingsWorkflow.snapshot.focusedRowIndex
+        set(value) {
+            settingsWorkflow.apply(SettingsAction.FocusRow(value))
+        }
     private var queueViewportStates by mutableStateOf<Map<View, QueueViewportState>>(emptyMap())
-    var queueScopeFilters by mutableStateOf<Map<View, QueueScopeFilter>>(emptyMap())
+    var queueScopeFilters: Map<View, QueueScopeFilter>
+        get() = View.entries.associateWith { reviewWorkspace.snapshot.configuration.scope }
+        set(value) {
+            val scope = value[View.NeedsReview] ?: value.values.firstOrNull() ?: QueueScopeFilter.All
+            updateQueueConfiguration { copy(scope = scope) }
+        }
+
+    private fun updateQueueConfiguration(
+        transform: ReviewWorkspaceQueueConfiguration.() -> ReviewWorkspaceQueueConfiguration,
+    ) {
+        reviewWorkspace.apply(
+            WorkspaceAction.ConfigureQueue(reviewWorkspace.snapshot.configuration.transform()),
+        )
+    }
+
+    private fun updateSettingsDraft(
+        transform: SettingsDraft.() -> SettingsDraft,
+    ) {
+        applySettingsAction(
+            SettingsAction.ReplaceDraft(settingsWorkflow.snapshot.draft.transform()),
+        )
+    }
+
+    fun applySettingsAction(action: SettingsAction) {
+        settingsWorkflow.apply(action)
+        val draft = settingsWorkflow.snapshot.draft
+        updateQueueConfiguration {
+            copy(
+                mutedRepositories = draft.mutedRepositories.toSet(),
+                sortMode = draft.sortMode,
+                staleThresholdDaysText = draft.staleThresholdDays,
+            )
+        }
+    }
+
+    fun applyWorkspaceAction(action: WorkspaceAction) {
+        reviewWorkspace.apply(action)
+    }
+
+    val settingsValidation: SettingsValidation
+        get() = settingsWorkflow.snapshot.validation
 
     fun loadFromDisk() {
         Files.createDirectories(configDir)
-        var settings = settingsStore.load()
+        applySettingsAction(SettingsAction.Reload)
+        var settings = settingsWorkflow.snapshot.applied
         if (!settings.onboardingCompleted && settings.repositories.isNotEmpty()) {
             settings = settings.copy(onboardingCompleted = true)
-            settingsStore.save(settings)
+            applySettingsAction(SettingsAction.ReplaceDraft(SettingsDraft.from(settings)))
+            applySettingsAction(SettingsAction.Apply)
         }
         githubIdentity = settings.githubIdentityLogin
             .takeIf(String::isNotBlank)
@@ -656,12 +787,12 @@ class AppState(
         organizationsText = settings.organizations.joinToString("\n")
         ghPathText = settings.githubExecutable
         ghDetectionSource = settings.githubDetectionSource
-        GhClient.configureExecutable(ghPathText)
+        githubIntegration.configureExecutable(ghPathText)
         if (ghPathText.isBlank()) {
-            GhClient.detectExecutableResult()?.let { detected ->
+            githubIntegration.detectExecutableResult()?.let { detected ->
                 ghPathText = detected.executable
                 ghDetectionSource = detected.source.label
-                GhClient.configureExecutable(detected.executable)
+                githubIntegration.configureExecutable(detected.executable)
             } ?: run {
                 ghDetectionSource = "Not detected"
             }
@@ -703,12 +834,8 @@ class AppState(
         }
         if (onboarding == null) {
             onboarding = OnboardingCoordinator(
-                preflight = ResolvingGitHubPreflightGateway(
-                    resolveExecutable = {
-                        GhClient.detectExecutable() ?: ghPathText.takeIf(String::isNotBlank)
-                    },
-                ),
-                discovery = OnboardingDiscoveryGateway { GhClient.discoverScope() },
+                preflight = githubIntegration,
+                discovery = OnboardingDiscoveryGateway { githubIntegration.discoverScope() },
                 progressStore = SettingsOnboardingProgressStore(settingsStore),
             )
         }
@@ -780,9 +907,7 @@ class AppState(
         val coordinator = onboarding ?: return
         coordinator.complete()
         onboardingState = coordinator.state
-        val settings = settingsStore.load()
-        repositoriesText = settings.repositories.joinToString("\n")
-        organizationsText = settings.organizations.joinToString("\n")
+        applySettingsAction(SettingsAction.Reload)
         githubIdentity = coordinator.state.identity
         view = View.NeedsReview
         if (repositoriesText.isNotBlank()) refresh()
@@ -791,6 +916,7 @@ class AppState(
     fun restartOnboarding() {
         val coordinator = onboarding ?: return
         coordinator.restart()
+        applySettingsAction(SettingsAction.Reload)
         onboardingState = coordinator.state
     }
 
@@ -863,13 +989,13 @@ class AppState(
         get() = updater.preferences()
 
     fun saveConfig() {
-        val ghPath = ghPathText.trim()
         Files.deleteIfExists(uiScaleFile)
         saveReminderState()
-        GhClient.configureExecutable(ghPath)
-        startReminderScheduler()
-        startAutoRefreshScheduler()
-        statusLine = "Settings saved · using OS display scaling · ${reminderStatus}"
+        statusLine = if (settingsValidation.isValid) {
+            "Settings saved · using OS display scaling · ${reminderStatus}"
+        } else {
+            "Settings need attention · ${settingsValidation.errors.values.first()}"
+        }
     }
 
 
@@ -881,7 +1007,7 @@ class AppState(
     }
 
     fun autoDetectGithubCli() {
-        val detected = GhClient.detectExecutableResult()
+        val detected = githubIntegration.detectExecutableResult()
         if (detected == null) {
             ghDetectionSource = "Not detected"
             ghTestResult = "Could not auto-detect GitHub CLI on ${currentDesktopPlatform().displayName}. Install gh or make it available through your system PATH."
@@ -890,7 +1016,7 @@ class AppState(
         }
         ghPathText = detected.executable
         ghDetectionSource = detected.source.label
-        GhClient.configureExecutable(detected.executable)
+        githubIntegration.configureExecutable(detected.executable)
         saveConfig()
         statusLine = "Detected GitHub CLI via ${detected.source.label}"
     }
@@ -912,13 +1038,13 @@ class AppState(
 
     fun testGithubCli() {
         if (isTestingGh) return
-        GhClient.configureExecutable(ghPathText)
+        githubIntegration.configureExecutable(ghPathText)
         isTestingGh = true
         ghTestResult = null
         statusLine = "Testing GitHub CLI…"
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { GhClient.testConnection() }
+                runCatching { githubIntegration.testConnection() }
                     .fold(
                         onSuccess = { WorkerResult(value = it) },
                         onFailure = { WorkerResult(error = it.message ?: it.toString()) },
@@ -934,6 +1060,11 @@ class AppState(
                 ?.let { applyGitHubIdentity(GitHubIdentity(it)) }
             statusLine = result.value ?: "GitHub CLI test failed"
         }
+    }
+
+    fun loadGitHubProfile(): GitHubProfile {
+        githubIntegration.configureExecutable(ghPathText)
+        return githubIntegration.loadProfile()
     }
 
     fun saveHandled() {
@@ -958,7 +1089,7 @@ class AppState(
         selectedRepositories: List<String>,
         showReminderAfterRefresh: Boolean = false,
     ) {
-        GhClient.configureExecutable(ghPathText)
+        githubIntegration.configureExecutable(ghPathText)
         isRefreshing = true
         isDiscovering = false
         lastRefreshStartedAt = Instant.now()
@@ -1016,7 +1147,7 @@ class AppState(
             }
         } else {
             val refreshed = result.value.orEmpty()
-            GhClient.activeIdentity()?.let(::applyGitHubIdentity)
+            githubIntegration.activeIdentity()?.let(::applyGitHubIdentity)
             val previousByKey = pullRequests.associateBy { it.key }
 
             newPullRequestKeys = refreshed
@@ -1084,7 +1215,7 @@ class AppState(
     fun discoverTargets() {
         if (isDiscovering) return
 
-        GhClient.configureExecutable(ghPathText)
+        githubIntegration.configureExecutable(ghPathText)
         val orgs = parseLines(organizationsText)
         if (orgs.isEmpty()) {
             statusLine = "Add one or more organizations before discovering repositories."
@@ -1193,13 +1324,13 @@ class AppState(
 
     fun discoverGitHubScope() {
         if (isDiscovering) return
-        GhClient.configureExecutable(ghPathText)
+        githubIntegration.configureExecutable(ghPathText)
         isDiscovering = true
         repositoryDiscoveryError = null
         statusLine = "Discovering organizations and repositories…"
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { GhClient.discoverScope() }
+                runCatching { githubIntegration.discoverScope() }
             }
             isDiscovering = false
             result.onSuccess { discovered ->
@@ -1263,17 +1394,7 @@ class AppState(
     }
 
     fun visiblePullRequests(): List<PullRequest> {
-        return ReviewQueue.visible(
-            pullRequests = pullRequests,
-            view = view,
-            searchQuery = searchQuery,
-            scope = currentQueueScopeFilter(),
-            handledReviewRecords = handledReviewRecords,
-            pinnedPullRequestKeys = pinnedPrKeys,
-            mutedRepositories = parseLines(mutedRepositoriesText).toSet(),
-            sortMode = sortMode,
-            staleThresholdDays = staleThresholdDaysText.toLongOrNull()?.coerceIn(1L, 30L) ?: 2L,
-        )
+        return reviewWorkspace.snapshot.visiblePullRequests
     }
 
     fun setQueueScopeFilter(filter: QueueScopeFilter) {
@@ -1284,19 +1405,10 @@ class AppState(
         // Keep the map shape for compatibility with the command layer, but store one shared value.
         queueScopeFilters = View.entries.associateWith { filter }
         expandedPullRequestKey = null
-        selectedPullRequest = selectedPullRequest
-            ?.takeIf { selected ->
-                visiblePullRequests().any {
-                    it.key == selected.key && it.source == selected.source
-                }
-            }
-            ?: visiblePullRequests().firstOrNull()
     }
 
     fun currentQueueScopeFilter(): QueueScopeFilter =
-        queueScopeFilters[View.NeedsReview]
-            ?: queueScopeFilters.values.firstOrNull()
-            ?: QueueScopeFilter.All
+        reviewWorkspace.snapshot.configuration.scope
 
     fun clearQueueScopeFilter() {
         setQueueScopeFilter(QueueScopeFilter.All)
@@ -1307,18 +1419,8 @@ class AppState(
         ReviewQueue.activePullRequests(pullRequests, parseLines(mutedRepositoriesText).toSet())
 
     fun replacePullRequests(items: List<PullRequest>) {
-        val selected = selectedPullRequest
-        val previousIndex = selected?.let { previous ->
-            visiblePullRequests().indexOfFirst {
-                it.key == previous.key && it.source == previous.source
-            }
-        } ?: -1
-        pullRequests = dedupePullRequests(items)
+        reviewWorkspace.apply(WorkspaceAction.ReplacePullRequests(items))
         val visible = visiblePullRequests()
-        selectedPullRequest = selected?.let { previous ->
-            visible.firstOrNull { it.key == previous.key && it.source == previous.source }
-        } ?: visible.getOrNull(previousIndex.coerceAtMost(visible.lastIndex))
-                ?: visible.firstOrNull()
         if (view != View.Settings) {
             keyboardFocusRegion = FocusRegion.PullRequestList
         }
@@ -1483,30 +1585,28 @@ class AppState(
     fun isHandledCurrent(pr: PullRequest): Boolean = handledReviewRecords[pr.key] == pr.updatedMarker
 
     fun selectView(next: View) {
-        selectedPullRequest?.let { selected ->
-            queueSelectionKeys = queueSelectionKeys + (view to selected.key)
-        }
-        view = next
+        reviewWorkspace.apply(WorkspaceAction.SelectView(next))
         if (
             next == View.NeedsReview &&
             currentQueueScopeFilter() == QueueScopeFilter.All
         ) {
             needsReviewHasUnseenChanges = false
         }
-        val rememberedKey = queueSelectionKeys[next]
-        selectedPullRequest = if (next == View.Settings) {
-            null
-        } else {
-            QueueContext.restoreSelection(visiblePullRequests(), rememberedKey)
+        expandedPullRequestKey = null
+        keyboardMode = KeyboardMode.Normal
+    }
+
+    fun browseSidebar(delta: Int) {
+        reviewWorkspace.apply(WorkspaceAction.BrowseSidebar(delta))
+        val next = reviewWorkspace.snapshot.view
+        if (
+            next == View.NeedsReview &&
+            currentQueueScopeFilter() == QueueScopeFilter.All
+        ) {
+            needsReviewHasUnseenChanges = false
         }
         expandedPullRequestKey = null
         keyboardMode = KeyboardMode.Normal
-        if (next in SidebarKeyboardViews) {
-            sidebarKeyboardView = next
-        }
-        if (next != View.Settings) {
-            keyboardFocusRegion = FocusRegion.PullRequestList
-        }
     }
 
     fun openTrackingSettings() {
@@ -1587,14 +1687,14 @@ class AppState(
             return
         }
 
-        GhClient.configureExecutable(ghPathText)
+        githubIntegration.configureExecutable(ghPathText)
         isMergingPullRequest = true
         mergingPullRequestKey = pr.key
         statusLine = "Merging ${pr.repository} #${pr.number}…"
 
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { GhClient.mergePullRequest(pr) }
+                runCatching { githubIntegration.mergePullRequest(pr) }
                     .fold(
                         onSuccess = { WorkerResult(value = it) },
                         onFailure = { WorkerResult(error = it.message ?: it.toString()) },
@@ -1740,12 +1840,17 @@ class AppState(
             statusLine = "GitHub account changed · review repository scope"
         }
         githubIdentity = identity
-        settingsStore.save(
-            settingsStore.load().copy(
-                githubIdentityLogin = identity.login,
-                githubIdentityHost = identity.host,
+        applySettingsAction(
+            SettingsAction.ReplaceDraft(
+                SettingsDraft.from(
+                    settingsStore.load().copy(
+                        githubIdentityLogin = identity.login,
+                        githubIdentityHost = identity.host,
+                    ),
+                ),
             ),
         )
+        applySettingsAction(SettingsAction.Apply)
     }
 
     fun startAutoRefreshScheduler() {
@@ -1769,7 +1874,9 @@ class AppState(
                 view == View.Pinned && pinnedPrKeys.contains(pr.key) -> 0
                 pr.source == PullRequestSource.ReviewRequest && isOlderThan(pr.updatedAt, staleDays) -> 10
                 pr.source == PullRequestSource.ReviewRequest -> 20
-                pr.source == PullRequestSource.Mine -> when (ownPullRequestPrimaryStatus(pr)) {
+                pr.source == PullRequestSource.Mine -> when (
+                    PullRequestAttention.describe(pr).ownStatus ?: OwnPullRequestStatus.NoActionNeeded
+                ) {
                     OwnPullRequestStatus.ChangesRequested -> 30
                     OwnPullRequestStatus.MergeConflict -> 31
                     OwnPullRequestStatus.ChecksFailing -> 32
@@ -1854,7 +1961,8 @@ class AppState(
 
     fun saveReminderState() {
         Files.createDirectories(configDir)
-        settingsStore.save(currentSettings())
+        applySettingsAction(SettingsAction.ReplaceDraft(SettingsDraft.from(currentSettings())))
+        applySettingsAction(SettingsAction.Apply)
         reminderSnoozedUntil?.let { reminderSnoozedUntilFile.writeLines(listOf(it.toString())) } ?: Files.deleteIfExists(reminderSnoozedUntilFile)
         reminderDismissedDate?.let { reminderDismissedDateFile.writeLines(listOf(it)) } ?: Files.deleteIfExists(reminderDismissedDateFile)
     }
@@ -2089,21 +2197,41 @@ fun currentDesktopPlatform(): DesktopPlatform {
     }
 }
 
-object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
+class ProcessGitHubIntegrationAdapter : GitHubIntegrationAdapter {
     @Volatile
     private var configuredExecutable: String? = null
     @Volatile
     private var activeLogin: String? = null
 
-    fun activeIdentity(): GitHubIdentity? = activeLogin?.let(::GitHubIdentity)
+    override fun activeIdentity(): GitHubIdentity? = activeLogin?.let(::GitHubIdentity)
 
-    fun configureExecutable(path: String) {
+    override suspend fun checkDependency(): GhDependencyResult =
+        configuredExecutable?.let { configured ->
+            if (canRunGh(configured)) {
+                GhDependencyResult.Available
+            } else {
+                GhDependencyResult.Error("Configured GitHub CLI executable does not work: $configured")
+            }
+        } ?: if (detectExecutableResult() != null) {
+            GhDependencyResult.Available
+        } else {
+            GhDependencyResult.Missing
+        }
+
+    override suspend fun checkAuthentication(): GhAuthenticationResult = runCatching {
+        ensureAuthenticated()
+        GhAuthenticationResult.Authenticated(GitHubIdentity(currentLogin()))
+    }.getOrElse { error ->
+        GhAuthenticationResult.Error(error.message ?: "GitHub authentication could not be checked.")
+    }
+
+    override fun configureExecutable(path: String) {
         configuredExecutable = path.trim().ifBlank { null }
     }
 
     fun detectExecutable(): String? = detectExecutableResult()?.executable
 
-    fun detectExecutableResult(): GhDetectionResult? = detectGhExecutableResult()
+    override fun detectExecutableResult(): GhDetectionResult? = detectGhExecutableResult()
 
     override fun discoverRepositories(organizations: List<String>): List<String> {
         ensureAuthenticated()
@@ -2112,7 +2240,7 @@ object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
         }.discoverRepositories(organizations)
     }
 
-    fun discoverScope(): RepositoryDiscoveryResult {
+    override fun discoverScope(): RepositoryDiscoveryResult {
         ensureAuthenticated()
         val login = currentLogin()
         val organizations = runGh(
@@ -2210,9 +2338,9 @@ object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
         return dedupePullRequests(reviewRequests + assignments + enrichedMine)
     }
 
-    fun mergePullRequest(pr: PullRequest): String {
+    override fun mergePullRequest(pullRequest: PullRequest): String {
         ensureAuthenticated()
-        val endpoint = "repos/${pr.repository.owner}/${pr.repository.name}/pulls/${pr.number}/merge"
+        val endpoint = "repos/${pullRequest.repository.owner}/${pullRequest.repository.name}/pulls/${pullRequest.number}/merge"
 
         return runGh(
             "api",
@@ -2220,16 +2348,31 @@ object GhClient : PullRequestIntakeGateway, RepositoryCatalogGateway {
             "-X", "PUT",
             "--jq", ".message // if .merged then \"Pull Request successfully merged\" else \"Merge request did not complete\" end",
         ).ifBlank {
-            "Merged ${pr.repository} #${pr.number}"
+            "Merged ${pullRequest.repository} #${pullRequest.number}"
         }
     }
 
-    fun testConnection(): String {
+    override fun testConnection(): String {
         val executable = resolveGhExecutable()
         ensureAuthenticated()
         val login = currentLogin()
         val version = runGh("--version").lineSequence().firstOrNull().orEmpty()
         return "✓ gh works · authenticated as $login · $version · $executable"
+    }
+
+    override fun loadProfile(): GitHubProfile {
+        val jq = "[.login, (.name // \"\"), (.avatar_url // \"\"), (.html_url // \"\")] | @tsv"
+        val parts = runGh("api", "user", "--jq", jq).split('\t', limit = 4)
+        val login = parts.getOrNull(0).orEmpty().trim()
+        if (login.isBlank()) error("GitHub CLI did not return an account login")
+        activeLogin = login
+        return GitHubProfile(
+            login = login,
+            name = parts.getOrNull(1)?.trim()?.ifBlank { null },
+            avatarUrl = parts.getOrNull(2)?.trim()?.ifBlank { null },
+            profileUrl = parts.getOrNull(3)?.trim()?.ifBlank { null }
+                ?: "https://github.com/$login",
+        )
     }
 
     private fun ensureAuthenticated() {
@@ -3122,7 +3265,6 @@ fun RevqApp(state: AppState) {
     }
 
     LaunchedEffect(state.mainWindowFocusRequest) {
-        delay(50)
         rootFocusRequester.requestFocus()
     }
 
@@ -3968,13 +4110,13 @@ private fun rowPresentation(
     startHere: Boolean,
 ): RowPresentation {
     if (pr.source == PullRequestSource.Mine) {
-        val primary = ownPullRequestPrimaryStatus(pr)
-        val signals = ownPullRequestSignals(pr)
-        val secondaryCount = (signals.size - 1).coerceAtLeast(0)
+        val attention = PullRequestAttention.describe(pr)
+        val primary = attention.ownStatus ?: OwnPullRequestStatus.NoActionNeeded
+        val secondaryCount = (attention.ownStatusPresentations.size - 1).coerceAtLeast(0)
         val suffix = if (secondaryCount > 0) " · +$secondaryCount more" else ""
 
         return RowPresentation(
-            text = ownPullRequestRowStatus(pr, primary) + suffix,
+            text = attention.presentation.rowStatus + suffix,
             color = colorForOwnPullRequestStatus(primary),
             strong = primary in setOf(
                 OwnPullRequestStatus.ChangesRequested,
@@ -4129,9 +4271,9 @@ private fun mainToolbarSubtitle(state: AppState): String {
                 .filter {
                     it.source == PullRequestSource.Mine
                 }
-            val attention = mine.count(::ownPullRequestNeedsAction)
+            val attention = mine.count { PullRequestAttention.describe(it).needsAction }
             val ready = mine.count {
-                ownPullRequestPrimaryStatus(it) == OwnPullRequestStatus.ApprovedAndReady
+                PullRequestAttention.describe(it).ownStatus == OwnPullRequestStatus.ApprovedAndReady
             }
             buildString {
                 append("${mine.size} open")
@@ -4578,7 +4720,7 @@ fun pullRequestReasonLabel(
     if (state.view == View.Pinned && state.isPinned(pr)) return "Pinned"
 
     return when {
-        pr.source == PullRequestSource.Mine -> ownPullRequestStatusTitle(ownPullRequestPrimaryStatus(pr))
+        pr.source == PullRequestSource.Mine -> PullRequestAttention.describe(pr).presentation.statusTitle
         state.view == View.Handled -> {
             val changed = whatChanged(state, pr)
             if (changed.startsWith("Updated")) "Changed" else "Reviewed"
@@ -5124,12 +5266,7 @@ fun Pill(label: String, color: Color, textColor: Color) {
     )
 }
 
-internal val SidebarKeyboardViews = listOf(
-    View.NeedsReview,
-    View.Handled,
-    View.Mine,
-    View.Pinned,
-)
+internal val SidebarKeyboardViews = ReviewWorkspace.SidebarViews
 
 private fun moveWithinFocusedRegion(
     state: AppState,
@@ -5137,7 +5274,7 @@ private fun moveWithinFocusedRegion(
 ) {
     when (state.keyboardFocusRegion) {
         FocusRegion.Sidebar -> browseSidebar(state, delta)
-        FocusRegion.PullRequestList -> moveSelection(state, delta)
+        FocusRegion.PullRequestList -> state.applyWorkspaceAction(WorkspaceAction.MoveSelection(delta))
     }
 }
 
@@ -5148,49 +5285,17 @@ private fun moveKeyboardFocus(
     if (state.view == View.Settings) return
 
     state.keyboardMode = KeyboardMode.Normal
-    state.keyboardFocusRegion = when (state.keyboardFocusRegion) {
-        FocusRegion.Sidebar -> {
-            if (direction > 0) FocusRegion.PullRequestList else FocusRegion.Sidebar
-        }
-
-        FocusRegion.PullRequestList -> {
-            when {
-                direction < 0 -> {
-                    if (state.view in SidebarKeyboardViews) {
-                        state.sidebarKeyboardView = state.view
-                    }
-                    state.showSidebarNavigationHintOnce()
-                    FocusRegion.Sidebar
-                }
-
-                else -> FocusRegion.PullRequestList
-            }
-        }
+    if (state.keyboardFocusRegion == FocusRegion.PullRequestList && direction < 0) {
+        state.showSidebarNavigationHintOnce()
     }
+    state.applyWorkspaceAction(WorkspaceAction.MoveKeyboardFocus(direction))
 }
 
 private fun moveToRegionBoundary(
     state: AppState,
     first: Boolean,
 ) {
-    when (state.keyboardFocusRegion) {
-        FocusRegion.Sidebar -> {
-            state.sidebarKeyboardView = if (first) {
-                SidebarKeyboardViews.first()
-            } else {
-                SidebarKeyboardViews.last()
-            }
-        }
-
-        FocusRegion.PullRequestList -> {
-            val items = state.visiblePullRequests()
-            if (items.isNotEmpty()) {
-                state.expandedPullRequestKey = null
-                state.selectedPullRequest = if (first) items.first() else items.last()
-            }
-        }
-
-    }
+    state.applyWorkspaceAction(WorkspaceAction.MoveToBoundary(first))
 }
 
 private fun moveByHalfPage(
@@ -5201,75 +5306,34 @@ private fun moveByHalfPage(
         // Half-page movement only makes sense in the pull request list.
         // The sidebar has only a few destinations and j/k already wrap through them.
         FocusRegion.Sidebar -> Unit
-        FocusRegion.PullRequestList -> moveSelection(
-            state = state,
-            delta = direction * max(1, state.keyboardPageStep),
+        FocusRegion.PullRequestList -> state.applyWorkspaceAction(
+            WorkspaceAction.MoveSelection(direction * max(1, state.keyboardPageStep)),
         )
     }
 }
 
 private fun activateFocusedRegion(state: AppState) {
-    when (state.keyboardFocusRegion) {
-        FocusRegion.Sidebar -> state.selectView(state.sidebarKeyboardView)
-
-        FocusRegion.PullRequestList -> {
-            if (state.selectedPullRequest == null) {
-                state.visiblePullRequests().firstOrNull()?.let {
-                    state.selectedPullRequest = it
-                }
-            } else {
-                state.toggleSelectedPullRequestDetails()
-            }
-        }
+    val selected = state.selectedPullRequest
+    state.applyWorkspaceAction(WorkspaceAction.ActivateFocused)
+    if (state.keyboardFocusRegion == FocusRegion.PullRequestList && selected != null) {
+        state.newPullRequestKeys = state.newPullRequestKeys - selected.key
+        state.updatedPullRequestKeys = state.updatedPullRequestKeys - selected.key
     }
 }
 
 private fun escapeKeyboardContext(state: AppState) {
-    when (state.keyboardFocusRegion) {
-        FocusRegion.PullRequestList -> {
-            if (state.expandedPullRequestKey != null) {
-                state.expandedPullRequestKey = null
-            } else if (state.selectedPullRequest != null) {
-                state.selectedPullRequest = null
-            }
-        }
-        FocusRegion.Sidebar -> {
-            if (state.view != View.Settings) {
-                state.keyboardFocusRegion = FocusRegion.PullRequestList
-            }
-        }
-    }
+    state.applyWorkspaceAction(WorkspaceAction.Escape)
 }
 
 fun browseSidebar(
     state: AppState,
     delta: Int,
 ) {
-    if (SidebarKeyboardViews.isEmpty()) return
-
-    val currentIndex = SidebarKeyboardViews.indexOf(state.sidebarKeyboardView)
-        .takeIf { it >= 0 }
-        ?: SidebarKeyboardViews.indexOf(state.view).coerceAtLeast(0)
-
-    val size = SidebarKeyboardViews.size
-    val nextIndex = ((currentIndex + delta) % size + size) % size
-    state.selectView(SidebarKeyboardViews[nextIndex])
-    state.keyboardFocusRegion = FocusRegion.Sidebar
+    state.browseSidebar(delta)
 }
 
 fun moveSelection(state: AppState, delta: Int) {
-    val items = state.visiblePullRequests()
-    if (items.isEmpty()) return
-    state.expandedPullRequestKey = null
-    val current = state.selectedPullRequest
-    val index = current?.let {
-        items.indexOfFirst { pr -> pr.key == it.key && pr.source == it.source }
-    } ?: -1
-    val next = when {
-        index < 0 -> if (delta < 0) items.lastIndex else 0
-        else -> (index + delta).coerceIn(0, items.lastIndex)
-    }
-    state.selectedPullRequest = items[next]
+    state.applyWorkspaceAction(WorkspaceAction.MoveSelection(delta))
 }
 
 fun buildDisplayDiagnostics(
@@ -5580,106 +5644,6 @@ fun sortForView(view: View, prs: List<PullRequest>): List<PullRequest> = when (v
     else -> prs.sortedByDescending { instantOrNull(it.updatedAt) ?: Instant.EPOCH }
 }
 
-fun ownPullRequestSignals(pr: PullRequest): List<OwnPullRequestStatus> =
-    PullRequestAttention.describe(pr).ownStatuses
-
-fun ownPullRequestPrimaryStatus(pr: PullRequest): OwnPullRequestStatus =
-    PullRequestAttention.describe(pr).ownStatus ?: OwnPullRequestStatus.NoActionNeeded
-
-fun ownPullRequestNeedsAction(pr: PullRequest): Boolean =
-    PullRequestAttention.describe(pr).needsAction
-
-fun ownPullRequestRowStatus(
-    pr: PullRequest,
-    status: OwnPullRequestStatus = ownPullRequestPrimaryStatus(pr),
-): String {
-    return when (status) {
-        OwnPullRequestStatus.ChangesRequested ->
-            formatIdentityList(pr.changeRequestReviewers, maxVisible = 1)
-                ?.let { "Changes requested by $it" }
-                ?: ownPullRequestStatusTitle(status)
-
-        OwnPullRequestStatus.WaitingForReviewer ->
-            formatIdentityList(pr.requestedReviewers, maxVisible = 2)
-                ?.let { "Waiting on $it" }
-                ?: ownPullRequestStatusTitle(status)
-
-        OwnPullRequestStatus.ApprovedAndReady ->
-            formatIdentityList(pr.approvingReviewers, maxVisible = 2)
-                ?.let { "Approved by $it" }
-                ?: ownPullRequestStatusTitle(status)
-
-        OwnPullRequestStatus.DiscussionNeedsResponse ->
-            formatIdentityList(pr.unresolvedDiscussionAuthors, maxVisible = 1)
-                ?.let { "Open discussion with $it" }
-                ?: ownPullRequestStatusTitle(status)
-
-        else -> ownPullRequestStatusTitle(status)
-    }
-}
-
-fun ownPullRequestStatusTitle(status: OwnPullRequestStatus): String = when (status) {
-    OwnPullRequestStatus.Draft -> "Draft"
-    OwnPullRequestStatus.ChangesRequested -> "Changes requested"
-    OwnPullRequestStatus.MergeConflict -> "Merge conflict"
-    OwnPullRequestStatus.ChecksFailing -> "Checks failing"
-    OwnPullRequestStatus.DiscussionNeedsResponse -> "Discussion needs response"
-    OwnPullRequestStatus.ApprovedAndReady -> "Approved and ready"
-    OwnPullRequestStatus.WaitingForReviewer -> "Waiting for reviewer"
-    OwnPullRequestStatus.NoActionNeeded -> "No action needed"
-}
-
-fun ownPullRequestStatusBody(status: OwnPullRequestStatus, pr: PullRequest): String = when (status) {
-    OwnPullRequestStatus.Draft ->
-        "This pull request is still a draft. Keep working on it, or mark it ready for review when the change is ready."
-
-    OwnPullRequestStatus.ChangesRequested -> {
-        val reviewers = formatIdentityList(pr.changeRequestReviewers)
-        if (reviewers != null) {
-            "$reviewers requested changes. Review the feedback and update the pull request before it can move forward."
-        } else {
-            "A reviewer requested changes. Review the feedback and update the pull request before it can move forward."
-        }
-    }
-
-    OwnPullRequestStatus.MergeConflict ->
-        "GitHub reports that this pull request cannot merge cleanly. Update the branch and resolve the merge conflict."
-
-    OwnPullRequestStatus.ChecksFailing ->
-        "${pr.checksFailing} ${if (pr.checksFailing == 1) "check is" else "checks are"} failing. Open GitHub to inspect the failures and decide what needs to change."
-
-    OwnPullRequestStatus.DiscussionNeedsResponse -> {
-        val count = pr.unresolvedDiscussionCount ?: 0
-        val authors = formatIdentityList(pr.unresolvedDiscussionAuthors)
-        buildString {
-            append("$count ${if (count == 1) "review discussion is" else "review discussions are"} still unresolved.")
-            if (authors != null) append(" Open ${if (count == 1) "thread involves" else "threads involve"} $authors.")
-            append(" Open the review threads and respond or resolve them as appropriate.")
-        }
-    }
-
-    OwnPullRequestStatus.ApprovedAndReady -> {
-        val reviewers = formatIdentityList(pr.approvingReviewers)
-        if (reviewers != null) {
-            "Approved by $reviewers. Checks are clear and no merge conflict is detected. It looks ready to move forward."
-        } else {
-            "The pull request is approved, checks are clear, and no merge conflict is detected. It looks ready to move forward."
-        }
-    }
-
-    OwnPullRequestStatus.WaitingForReviewer -> {
-        val reviewers = formatIdentityList(pr.requestedReviewers)
-        if (reviewers != null) {
-            "Waiting on $reviewers. No action is required from you right now; RevQ will keep tracking the pull request for new activity."
-        } else {
-            "No action is required from you right now. The pull request is open and waiting for review."
-        }
-    }
-
-    OwnPullRequestStatus.NoActionNeeded ->
-        "RevQ found no current signal that requires your attention. You can leave this pull request alone for now."
-}
-
 fun colorForOwnPullRequestStatus(status: OwnPullRequestStatus): Color = when (status) {
     OwnPullRequestStatus.Draft -> InfoBlue
     OwnPullRequestStatus.ChangesRequested -> Rose
@@ -5703,27 +5667,23 @@ fun colorForKind(kind: AttentionKind): Color = when (kind) {
 }
 
 fun rowLabel(pr: PullRequest): String = when {
-    pr.source == PullRequestSource.Mine -> ownPullRequestStatusTitle(ownPullRequestPrimaryStatus(pr))
+    pr.source == PullRequestSource.Mine -> PullRequestAttention.describe(pr).presentation.statusTitle
     else -> "Needs your review"
 }
 
 fun attentionReason(pr: PullRequest): String = when {
-    pr.source == PullRequestSource.Mine -> ownPullRequestStatusBody(ownPullRequestPrimaryStatus(pr), pr)
+    pr.source == PullRequestSource.Mine -> PullRequestAttention.describe(pr).presentation.statusBody
     else -> "Review requested from you"
 }
 
-fun recommendationTitle(pr: PullRequest): String = when {
-    pr.source == PullRequestSource.Mine -> ownPullRequestStatusTitle(ownPullRequestPrimaryStatus(pr))
-    else -> "Review this pull request"
-}
+fun recommendationTitle(pr: PullRequest): String =
+    PullRequestAttention.describe(pr).presentation.recommendationTitle
 
-fun recommendationBody(pr: PullRequest): String = when {
-    pr.source == PullRequestSource.Mine -> ownPullRequestStatusBody(ownPullRequestPrimaryStatus(pr), pr)
-    else -> "Open the diff, check the changes, and leave an approval, comment, or change request."
-}
+fun recommendationBody(pr: PullRequest): String =
+    PullRequestAttention.describe(pr).presentation.recommendationBody
 
 fun whyItMatters(pr: PullRequest): String = when {
-    pr.source == PullRequestSource.Mine -> ownPullRequestStatusBody(ownPullRequestPrimaryStatus(pr), pr)
+    pr.source == PullRequestSource.Mine -> PullRequestAttention.describe(pr).presentation.statusBody
     else -> "Your review is explicitly requested. This pull request is waiting on your review before it can move forward."
 }
 

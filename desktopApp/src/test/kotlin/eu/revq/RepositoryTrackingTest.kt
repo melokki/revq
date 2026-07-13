@@ -38,13 +38,7 @@ class RepositoryTrackingTest {
 
     @Test
     fun organizationWithoutSelectedRepositoriesPromptsDiscoveryInsteadOfRefreshing() {
-        val gateway = object : PullRequestIntakeGateway {
-            override fun prepareRefresh(): String = error("Refresh must not contact GitHub")
-
-            override fun refreshRepository(repository: String, login: String): List<PullRequest> =
-                error("Refresh must not contact GitHub")
-        }
-        val state = AppState(pullRequestIntake = PullRequestIntake(gateway)).apply {
+        val state = AppState().apply {
             organizationsText = "acme"
         }
 

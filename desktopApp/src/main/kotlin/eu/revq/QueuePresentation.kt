@@ -12,18 +12,8 @@ enum class AttentionReason(val label: String) {
 fun primaryAttentionReason(pullRequest: PullRequest): AttentionReason =
     PullRequestAttention.describe(pullRequest).primaryReason
 
-fun selectedRowContext(pullRequest: PullRequest): List<String> = buildList {
-    when {
-        pullRequest.checksFailing > 0 -> add("${pullRequest.checksFailing} CI failing")
-        pullRequest.checksPending > 0 -> add("${pullRequest.checksPending} CI pending")
-        pullRequest.checksTotal > 0 -> add("CI passing")
-    }
-    pullRequest.approvingReviewers
-        .distinct()
-        .size
-        .takeIf { it > 0 }
-        ?.let { count -> add(if (count == 1) "1 approval" else "$count approvals") }
-}
+fun selectedRowContext(pullRequest: PullRequest): List<String> =
+    PullRequestAttention.describe(pullRequest).presentation.selectedContext
 
 fun queueRowMetadata(
     pullRequest: PullRequest,
