@@ -8,6 +8,16 @@ data class PaletteDimensions(
     val maxHeight: Dp,
 )
 
+data class PaletteFooterHintSpec(
+    val key: String,
+    val label: String,
+)
+
+data class PaletteChromePresentation(
+    val footerHints: List<PaletteFooterHintSpec>,
+    val showTypePills: Boolean,
+)
+
 data class PaletteRowAccessibility(
     val label: String,
     val stateDescription: String,
@@ -37,6 +47,40 @@ fun paletteDimensions(
     return PaletteDimensions(
         width = (boundedWidth - 32.dp).coerceIn(320.dp, 800.dp),
         maxHeight = (boundedHeight - 32.dp).coerceIn(280.dp, 620.dp),
+    )
+}
+
+fun paletteChromePresentation(
+    availableWidth: Dp,
+    acceptsTextQuery: Boolean,
+    confirming: Boolean,
+    shortcutLabels: PaletteShortcutLabels,
+): PaletteChromePresentation {
+    val compact = availableWidth < 600.dp
+    val primaryHints = listOf(
+        PaletteFooterHintSpec("↑↓", "Move"),
+        PaletteFooterHintSpec("Enter", if (confirming) "Confirm" else "Run"),
+        PaletteFooterHintSpec("Esc", "Close"),
+    )
+    if (compact) {
+        return PaletteChromePresentation(
+            footerHints = primaryHints,
+            showTypePills = false,
+        )
+    }
+
+    return PaletteChromePresentation(
+        footerHints = buildList {
+            add(primaryHints[0])
+            add(PaletteFooterHintSpec(shortcutLabels.moveAlternative, "Move"))
+            add(primaryHints[1])
+            add(PaletteFooterHintSpec("${shortcutLabels.quickRun(1).dropLast(1)}1…9", "Run"))
+            if (acceptsTextQuery) {
+                add(PaletteFooterHintSpec(shortcutLabels.clear, "Clear"))
+            }
+            add(primaryHints[2])
+        },
+        showTypePills = true,
     )
 }
 

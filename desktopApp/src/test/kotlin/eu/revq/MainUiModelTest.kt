@@ -1,10 +1,33 @@
 package eu.revq
 
+import androidx.compose.ui.unit.dp
 import eu.revq.keyboard.FocusRegion
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class MainUiModelTest {
+    @Test
+    fun compactAboutDialogUsesWrappedActionsWithinScreenMargins() {
+        assertEquals(
+            AboutDialogPresentation(
+                width = 448.dp,
+                actionLayout = AboutDialogActionLayout.Wrapped,
+            ),
+            aboutDialogPresentation(availableWidth = 480.dp),
+        )
+    }
+
+    @Test
+    fun wideAboutDialogKeepsActionsInlineAndCapsItsWidth() {
+        assertEquals(
+            AboutDialogPresentation(
+                width = 520.dp,
+                actionLayout = AboutDialogActionLayout.Inline,
+            ),
+            aboutDialogPresentation(availableWidth = 900.dp),
+        )
+    }
+
     @Test
     fun personalPullRequestWithRequestedChangesHasChangesRequestedAttentionReason() {
         val pullRequest = pullRequest(

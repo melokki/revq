@@ -7,7 +7,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -341,14 +343,39 @@ fun main() {
             title = "RevQ",
             icon = appBrandPainter(),
         ) {
+            fun applyMainWindowFocus(trigger: MainWindowFocusTrigger) {
+                mainWindowFocusActions(trigger).forEach { action ->
+                    when (action) {
+                        MainWindowFocusAction.BringToFront -> window.toFront()
+                        MainWindowFocusAction.RequestNativeFocus -> window.requestFocus()
+                        MainWindowFocusAction.RequestComposeRootFocus -> appState.mainWindowFocusRequest += 1
+                    }
+                }
+            }
+
             DisposableEffect(window) {
                 val listener = object : WindowAdapter() {
                     override fun windowActivated(event: WindowEvent?) {
-                        appState.mainWindowFocusRequest += 1
+                        applyMainWindowFocus(MainWindowFocusTrigger.WindowActivated)
                     }
                 }
                 window.addWindowListener(listener)
                 onDispose { window.removeWindowListener(listener) }
+            }
+            LaunchedEffect(
+                window,
+                appState.applicationLoaded,
+                appState.onboardingRequired,
+                appState.mainWindowVisible,
+            ) {
+                if (
+                    appState.applicationLoaded &&
+                    !appState.onboardingRequired &&
+                    appState.mainWindowVisible
+                ) {
+                    delay(75)
+                    applyMainWindowFocus(MainWindowFocusTrigger.ContentReady)
+                }
             }
             RevqTheme(uiScale = appState.uiScale) {
                 when {
@@ -4362,100 +4389,153 @@ private fun AboutRevqDialog(
         ?.takeIf { it.isNotBlank() }
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier.width(460.dp),
-            color = PanelBg,
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, Border),
-        ) {
-            Column(
-                modifier = Modifier.padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+        BoxWithConstraints {
+            val presentation = aboutDialogPresentation(maxWidth)
+            Surface(
+                modifier = Modifier.width(presentation.width),
+                color = PanelBg,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Border),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    AppBrandMark(
-                        contentDescription = null,
-                        modifier = Modifier.size(54.dp),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "RevQ",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                        Text(
-                            text = "Review companion",
-                            color = TextMuted,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-
-                Divider(color = Border)
-
-                Row(Modifier.fillMaxWidth()) {
-                    Text("Version", color = TextMuted, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.weight(1f))
-                    Text(version, color = TextPrimary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                }
-
-                Text(
-                    text = "A keyboard-first companion for keeping pull request review work visible and moving.",
-                    color = TextMuted,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-
-                val available = state.updateState as? UpdateState.Available
-                if (available != null) {
-                    Text(
-                        text = "RevQ ${available.release.version} is available",
-                        color = Olive,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (available.release.notes.isNotBlank()) {
-                        Text(
-                            text = available.release.notes.take(600),
-                            color = TextMuted,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 8,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        enabled = state.updateState != UpdateState.Checking,
-                        onClick = state::checkForUpdates,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Text("Check for updates", color = Olive)
+                        AppBrandMark(
+                            contentDescription = null,
+                            modifier = Modifier.size(54.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = "RevQ",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleLarge,
+                            )
+                            Text(
+                                text = "Review companion",
+                                color = TextMuted,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
                     }
-                    Spacer(Modifier.width(4.dp))
-                    TextButton(
-                        enabled = repositoryUrl != null,
-                        onClick = {
+
+                    Divider(color = Border)
+
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Version", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            version,
+                            color = TextPrimary,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+
+                    Text(
+                        text = "A keyboard-first companion for keeping pull request review work visible and moving.",
+                        color = TextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+
+                    val available = state.updateState as? UpdateState.Available
+                    if (available != null) {
+                        Text(
+                            text = "RevQ ${available.release.version} is available",
+                            color = Olive,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (available.release.notes.isNotBlank()) {
+                            Text(
+                                text = available.release.notes.take(600),
+                                color = TextMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 8,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+
+                    AboutDialogActions(
+                        presentation = presentation,
+                        checkingForUpdates = state.updateState == UpdateState.Checking,
+                        repositoryEnabled = repositoryUrl != null,
+                        onCheckForUpdates = state::checkForUpdates,
+                        onOpenRepository = {
                             repositoryUrl?.let(::openUrl) ?: run {
                                 state.statusLine = "Repository URL is not configured"
                             }
                         },
-                    ) {
-                        Text("Open project repository", color = if (repositoryUrl != null) Olive else TextMuted)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = onDismiss) {
-                        Text("Close")
-                    }
+                        onDismiss = onDismiss,
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AboutDialogActions(
+    presentation: AboutDialogPresentation,
+    checkingForUpdates: Boolean,
+    repositoryEnabled: Boolean,
+    onCheckForUpdates: () -> Unit,
+    onOpenRepository: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val actions: @Composable () -> Unit = {
+        TextButton(
+            enabled = !checkingForUpdates,
+            onClick = onCheckForUpdates,
+        ) {
+            Text(
+                text = "Check for updates",
+                color = Olive,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        TextButton(
+            enabled = repositoryEnabled,
+            onClick = onOpenRepository,
+        ) {
+            Text(
+                text = "Open project repository",
+                color = if (repositoryEnabled) Olive else TextMuted,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        Button(onClick = onDismiss) {
+            Text(
+                text = "Close",
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+    }
+
+    when (presentation.actionLayout) {
+        AboutDialogActionLayout.Inline -> Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            actions()
+        }
+
+        AboutDialogActionLayout.Wrapped -> FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            actions()
         }
     }
 }

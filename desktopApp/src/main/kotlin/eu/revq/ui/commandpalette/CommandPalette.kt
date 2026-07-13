@@ -206,6 +206,12 @@ fun CommandPalette(
     Dialog(onDismissRequest = paletteState::close) {
         BoxWithConstraints {
             val dimensions = paletteDimensions(maxWidth, maxHeight)
+            val chrome = paletteChromePresentation(
+                availableWidth = dimensions.width,
+                acceptsTextQuery = mode.acceptsTextQuery,
+                confirming = paletteState.confirmationMessage != null,
+                shortcutLabels = shortcutLabels,
+            )
             Surface(
                 modifier = Modifier
                     .width(dimensions.width)
@@ -237,15 +243,22 @@ fun CommandPalette(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .height(46.dp)
+                            .padding(horizontal = 8.dp)
+                            .heightIn(min = 52.dp)
                             .focusRequester(queryFocusRequester)
                             .semantics {
                                 contentDescription = "Search ${mode.title.lowercase()}"
                             },
                         singleLine = true,
                         placeholder = {
-                            Text(mode.placeholder, color = TextMuted)
+                            Text(
+                                text = mode.placeholder,
+                                color = TextMuted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         },
                         leadingIcon = {
                             Text(
@@ -292,7 +305,7 @@ fun CommandPalette(
                                     onClick = { approveAndExecute(result) },
                                     shortcutLabels = shortcutLabels,
                                     query = paletteState.query,
-                                    showTypePill = paletteState.query.isNotBlank(),
+                                    showTypePill = paletteState.query.isNotBlank() && chrome.showTypePills,
                                 )
                             }
                         }
@@ -305,9 +318,7 @@ fun CommandPalette(
                 }
                 HorizontalDivider(Modifier, DividerDefaults.Thickness, color = Border)
                 PaletteFooter(
-                    mode = mode,
-                    confirming = paletteState.confirmationMessage != null,
-                    shortcutLabels = shortcutLabels,
+                    hints = chrome.footerHints,
                 )
             }
             }
@@ -533,6 +544,8 @@ private fun ResultTypePill(
         color = if (selected) Olive else TextMuted,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(Color(0xFF15181C))
@@ -551,6 +564,8 @@ private fun QuickRunPill(
         color = if (selected) Color(0xFF151812) else Olive,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
             .background(if (selected) Olive else Color(0xFF2C3323))
@@ -569,6 +584,8 @@ private fun ShortcutPill(
         color = if (selected) TextPrimary else TextMuted,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
             .background(Color(0xFF15181C))
@@ -639,9 +656,7 @@ private fun PaletteEmptyState(
 
 @Composable
 private fun PaletteFooter(
-    mode: PaletteMode,
-    confirming: Boolean,
-    shortcutLabels: PaletteShortcutLabels,
+    hints: List<PaletteFooterHintSpec>,
 ) {
     Row(
         modifier = Modifier
@@ -650,15 +665,12 @@ private fun PaletteFooter(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        PaletteFooterHint("↑↓", "Move")
-        PaletteFooterHint(shortcutLabels.moveAlternative, "Move")
-        PaletteFooterHint("Enter", if (confirming) "Confirm" else "Run")
-        PaletteFooterHint("${shortcutLabels.quickRun(1).dropLast(1)}1…9", "Run")
-        if (mode.acceptsTextQuery) {
-            PaletteFooterHint(shortcutLabels.clear, "Clear")
+        hints.forEachIndexed { index, hint ->
+            if (index == hints.lastIndex) {
+                Spacer(Modifier.weight(1f))
+            }
+            PaletteFooterHint(hint.key, hint.label)
         }
-        Spacer(Modifier.weight(1f))
-        PaletteFooterHint("Esc", "Close")
     }
 }
 
@@ -676,11 +688,15 @@ private fun PaletteFooterHint(
             color = TextPrimary,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
         )
         Text(
             text = label,
             color = TextMuted,
             style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

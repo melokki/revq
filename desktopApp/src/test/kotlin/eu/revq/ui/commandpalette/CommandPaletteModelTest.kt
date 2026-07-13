@@ -281,6 +281,49 @@ class CommandPaletteModelTest {
     }
 
     @Test
+    fun `compact palette chrome keeps only essential footer hints and hides type pills`() {
+        assertEquals(
+            PaletteChromePresentation(
+                footerHints = listOf(
+                    PaletteFooterHintSpec("↑↓", "Move"),
+                    PaletteFooterHintSpec("Enter", "Run"),
+                    PaletteFooterHintSpec("Esc", "Close"),
+                ),
+                showTypePills = false,
+            ),
+            paletteChromePresentation(
+                availableWidth = 468.dp,
+                acceptsTextQuery = true,
+                confirming = false,
+                shortcutLabels = PaletteShortcutLabels(primaryModifier = "Ctrl+"),
+            ),
+        )
+    }
+
+    @Test
+    fun `wide palette chrome exposes all shortcuts and type pills`() {
+        assertEquals(
+            PaletteChromePresentation(
+                footerHints = listOf(
+                    PaletteFooterHintSpec("↑↓", "Move"),
+                    PaletteFooterHintSpec("Ctrl+N/P", "Move"),
+                    PaletteFooterHintSpec("Enter", "Confirm"),
+                    PaletteFooterHintSpec("Ctrl+1…9", "Run"),
+                    PaletteFooterHintSpec("Ctrl+U", "Clear"),
+                    PaletteFooterHintSpec("Esc", "Close"),
+                ),
+                showTypePills = true,
+            ),
+            paletteChromePresentation(
+                availableWidth = 800.dp,
+                acceptsTextQuery = true,
+                confirming = true,
+                shortcutLabels = PaletteShortcutLabels(primaryModifier = "Ctrl+"),
+            ),
+        )
+    }
+
+    @Test
     fun `palette row accessibility distinguishes actions from references`() {
         val refresh = PaletteResult.CommandResult(
             command = CommandRegistry.find(CommandId.Refresh)!!,
