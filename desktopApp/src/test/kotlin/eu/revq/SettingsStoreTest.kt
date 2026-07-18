@@ -26,6 +26,8 @@ class SettingsStoreTest {
             mutedRepositories = listOf("acme/legacy"),
             autoRefreshEnabled = false,
             autoRefreshIntervalMinutes = "15",
+            showReviewCountInTray = false,
+            notifyOnNewReviewAssignments = false,
             sortMode = "Updated newest",
             groupByRepository = true,
             staleThresholdDays = "5",

@@ -15,6 +15,8 @@ data class RevqSettings(
     val mutedRepositories: List<String> = emptyList(),
     val autoRefreshEnabled: Boolean = true,
     val autoRefreshIntervalMinutes: String = "5",
+    val showReviewCountInTray: Boolean = true,
+    val notifyOnNewReviewAssignments: Boolean = true,
     val sortMode: String = "Urgency",
     val groupByRepository: Boolean = false,
     val staleThresholdDays: String = "2",
@@ -63,6 +65,8 @@ class FileSettingsStore(
         mutedRepositories = lines("muted-repositories.txt"),
         autoRefreshEnabled = boolean("auto-refresh-enabled.txt", true),
         autoRefreshIntervalMinutes = value("auto-refresh-interval-minutes.txt", "5"),
+        showReviewCountInTray = boolean("show-review-count-in-tray.txt", true),
+        notifyOnNewReviewAssignments = boolean("notify-on-new-review-assignments.txt", true),
         sortMode = value("sort-mode.txt", "Urgency"),
         groupByRepository = boolean("group-by-repository.txt", false),
         staleThresholdDays = value("stale-threshold-days.txt", "2"),
@@ -92,6 +96,8 @@ class FileSettingsStore(
         write("muted-repositories.txt", settings.mutedRepositories)
         write("auto-refresh-enabled.txt", listOf(settings.autoRefreshEnabled.toString()))
         write("auto-refresh-interval-minutes.txt", listOf(settings.autoRefreshIntervalMinutes))
+        write("show-review-count-in-tray.txt", listOf(settings.showReviewCountInTray.toString()))
+        write("notify-on-new-review-assignments.txt", listOf(settings.notifyOnNewReviewAssignments.toString()))
         write("sort-mode.txt", listOf(settings.sortMode))
         write("group-by-repository.txt", listOf(settings.groupByRepository.toString()))
         write("stale-threshold-days.txt", listOf(settings.staleThresholdDays))

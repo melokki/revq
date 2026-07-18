@@ -288,6 +288,29 @@ private fun GeneralSettings(state: AppState) {
         )
     }
 
+    SettingsSectionLabel("TRAY & NOTIFICATIONS")
+    SettingsGroup {
+        ToggleSettingRow(
+            title = "Review count in tray",
+            description = "Show the global Needs Review count as a badge on the tray icon.",
+            checked = state.showReviewCountInTray,
+            onCheckedChange = {
+                state.showReviewCountInTray = it
+                state.saveConfig()
+            },
+        )
+        SettingsDivider()
+        ToggleSettingRow(
+            title = "New review assignment notifications",
+            description = "Show one aggregated window when a refresh finds reviews newly assigned to you. Scheduled reminders remain independent.",
+            checked = state.notifyOnNewReviewAssignments,
+            onCheckedChange = {
+                state.notifyOnNewReviewAssignments = it
+                state.saveConfig()
+            },
+        )
+    }
+
     SettingsSectionLabel("WORKSPACE DEFAULTS")
     SettingsGroup {
         ChoiceSettingRow(

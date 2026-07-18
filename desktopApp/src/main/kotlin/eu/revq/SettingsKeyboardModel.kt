@@ -38,8 +38,20 @@ private fun settingsRows(section: SettingsSection): List<SettingsInteractionRow>
                 state.saveConfig()
             }
         },
+        SettingsInteractionRow("Review count in tray") {
+            it.showReviewCountInTray = !it.showReviewCountInTray
+            it.saveConfig()
+        },
+        SettingsInteractionRow("New review assignment notifications") {
+            it.notifyOnNewReviewAssignments = !it.notifyOnNewReviewAssignments
+            it.saveConfig()
+        },
         SettingsInteractionRow("Row density") {
             it.compactRows = !it.compactRows
+            it.saveConfig()
+        },
+        SettingsInteractionRow("Default grouping") {
+            it.groupByRepository = !it.groupByRepository
             it.saveConfig()
         },
     )

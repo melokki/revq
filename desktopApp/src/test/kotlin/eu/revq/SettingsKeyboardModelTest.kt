@@ -5,6 +5,21 @@ import kotlin.test.assertEquals
 
 class SettingsKeyboardModelTest {
     @Test
+    fun generalKeyboardRowsIncludeTrayAndAssignmentNotificationSettings() {
+        assertEquals(
+            listOf(
+                "Auto refresh",
+                "Refresh interval",
+                "Review count in tray",
+                "New review assignment notifications",
+                "Row density",
+                "Default grouping",
+            ),
+            settingsRowLabels(SettingsSection.General),
+        )
+    }
+
+    @Test
     fun reviewKeyboardRowsMatchVisibleReviewSettings() {
         assertEquals(
             listOf("Default sort", "Stale after"),

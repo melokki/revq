@@ -327,6 +327,14 @@ fun main() {
             }
         }
 
+        val trayReviewCount = appState.trayReviewCount
+        LaunchedEffect(trayReviewCount, appState.showReviewCountInTray, appState.trayAvailable) {
+            updateTrayReviewCount(
+                reviewCount = trayReviewCount,
+                enabled = appState.showReviewCountInTray,
+            )
+        }
+
         Window(
             onCloseRequest = {
                 if (appState.trayAvailable) {
@@ -398,6 +406,29 @@ fun main() {
             ) {
                 RevqTheme(uiScale = appState.uiScale) {
                     ReminderWindow(appState)
+                }
+            }
+        }
+
+        val assignmentAlert = appState.reviewAssignmentAlert
+        if (assignmentAlert != null && !appState.showReminderWindow) {
+            Window(
+                onCloseRequest = appState::dismissReviewAssignmentAlert,
+                title = "RevQ New Review Assignment",
+                icon = appBrandPainter(),
+                undecorated = true,
+                alwaysOnTop = true,
+                resizable = false,
+                state = WindowState(
+                    size = DpSize(720.dp, 540.dp),
+                    position = WindowPosition.Aligned(Alignment.Center),
+                ),
+            ) {
+                RevqTheme(uiScale = appState.uiScale) {
+                    ReviewAssignmentNotificationWindow(
+                        state = appState,
+                        alert = assignmentAlert,
+                    )
                 }
             }
         }
@@ -545,6 +576,7 @@ class AppState(
     private var onboarding: OnboardingCoordinator? = onboardingCoordinator
     private var scheduledReminderPending = false
     private var sidebarNavigationHintShownThisSession = false
+    private var reviewAssignmentBaselineEstablished = false
 
     var view: View
         get() = reviewWorkspace.snapshot.view
@@ -652,6 +684,15 @@ class AppState(
     var autoRefreshIntervalMinutesText: String
         get() = settingsWorkflow.snapshot.draft.autoRefreshIntervalMinutes
         set(value) = updateSettingsDraft { copy(autoRefreshIntervalMinutes = value) }
+    var showReviewCountInTray: Boolean
+        get() = settingsWorkflow.snapshot.draft.showReviewCountInTray
+        set(value) = updateSettingsDraft { copy(showReviewCountInTray = value) }
+    var notifyOnNewReviewAssignments: Boolean
+        get() = settingsWorkflow.snapshot.draft.notifyOnNewReviewAssignments
+        set(value) {
+            updateSettingsDraft { copy(notifyOnNewReviewAssignments = value) }
+            if (!value) reviewAssignmentAlert = null
+        }
     var sortMode: String
         get() = reviewWorkspace.snapshot.configuration.sortMode
         set(value) {
@@ -678,6 +719,8 @@ class AppState(
     var updatedPullRequestKeys by mutableStateOf(emptySet<String>())
     var refreshDelta by mutableStateOf<RefreshDelta?>(null)
     var needsReviewHasUnseenChanges by mutableStateOf(false)
+    var reviewAssignmentAlert by mutableStateOf<ReviewAssignmentAlert?>(null)
+        private set
     var showAboutDialog by mutableStateOf(false)
     var sidebarNavigationHintVisible by mutableStateOf(false)
     var isMergingPullRequest by mutableStateOf(false)
@@ -816,6 +859,7 @@ class AppState(
                 if (parts.size == 2) parts[0] to parts[1] else null
             }
             .toMap()
+        reviewAssignmentBaselineEstablished = cacheBaselineExists()
         pullRequests = dedupePullRequests(loadCache())
         pinnedPrKeys = pinnedFile.safeLines().toSet()
         mutedRepositoriesText = settings.mutedRepositories.joinToString("\n")
@@ -1148,7 +1192,15 @@ class AppState(
         } else {
             val refreshed = result.value.orEmpty()
             githubIntegration.activeIdentity()?.let(::applyGitHubIdentity)
-            val previousByKey = pullRequests.associateBy { it.key }
+            val previousPullRequests = pullRequests
+            val previousByKey = previousPullRequests.associateBy { it.key }
+            val newlyAssignedReviews = ReviewAssignmentNotifications.newlyAssignedForRefresh(
+                baselineEstablished = reviewAssignmentBaselineEstablished,
+                previous = previousPullRequests,
+                refreshed = refreshed,
+                mutedRepositories = parseLines(mutedRepositoriesText).toSet(),
+            )
+            reviewAssignmentBaselineEstablished = true
 
             newPullRequestKeys = refreshed
                 .filter { it.key !in previousByKey }
@@ -1204,6 +1256,14 @@ class AppState(
 
             replacePullRequests(refreshed)
             saveCache()
+            val currentReviewKeys = reviewQueue().map { it.key }.toSet()
+            reviewAssignmentAlert = reviewAssignmentAlert?.let { alert ->
+                val available = alert.pullRequests.filter { it.key in currentReviewKeys }
+                if (available.isEmpty()) null else alert.copy(pullRequests = available)
+            }
+            if (notifyOnNewReviewAssignments && newlyAssignedReviews.isNotEmpty()) {
+                enqueueReviewAssignmentAlert(newlyAssignedReviews)
+            }
             val reviews = reviewQueue().size
             statusLine = "$successPrefix · $reviews reviews waiting"
             if (showReminderAfterRefresh || scheduledReminderPending) {
@@ -1768,6 +1828,8 @@ class AppState(
     fun clearCache() {
         pullRequests = emptyList()
         selectedPullRequest = null
+        reviewAssignmentAlert = null
+        reviewAssignmentBaselineEstablished = false
         Files.deleteIfExists(cacheFilePath())
         Files.deleteIfExists(legacyCacheFile)
         statusLine = "Local PR cache cleared"
@@ -1791,6 +1853,8 @@ class AppState(
             appendLine("visible PRs: ${visiblePullRequests().size}")
             appendLine("review queue: ${reviewQueue().size}")
             appendLine("auto refresh: $autoRefreshEnabled every ${autoRefreshIntervalMinutesText.ifBlank { "5" }} minutes")
+            appendLine("tray review count: $showReviewCountInTray; current ${reviewQueue().size}")
+            appendLine("new assignment notifications: $notifyOnNewReviewAssignments; pending ${reviewAssignmentAlert?.count ?: 0}")
             appendLine("reminders: $reminderEnabled at ${reminderTimeText.ifBlank { "09:00" }}; ${reminderStatus}")
             appendLine(displayDiagnostics)
             appendLine("last error: ${lastRefreshError ?: "none"}")
@@ -1799,6 +1863,44 @@ class AppState(
         copyToClipboard(text)
         statusLine = "Copied diagnostics"
     }
+
+    internal fun enqueueReviewAssignmentAlert(pullRequests: List<PullRequest>) {
+        reviewAssignmentAlert = ReviewAssignmentNotifications.merge(
+            current = reviewAssignmentAlert,
+            incoming = pullRequests,
+            detectedAt = Instant.now(),
+        )
+    }
+
+    fun dismissReviewAssignmentAlert() {
+        val count = reviewAssignmentAlert?.count ?: return
+        reviewAssignmentAlert = null
+        statusLine = if (count == 1) {
+            "New review notification dismissed"
+        } else {
+            "New review notification dismissed · $count reviews"
+        }
+    }
+
+    fun openReviewQueueFromAssignmentAlert() {
+        val alert = reviewAssignmentAlert ?: return
+        reviewAssignmentAlert = null
+        mainWindowVisible = true
+        setQueueScopeFilter(QueueScopeFilter.All)
+        selectView(View.NeedsReview)
+        val queueKeys = reviewQueue().map { it.key }.toSet()
+        selectedPullRequest = alert.pullRequests.firstOrNull { it.key in queueKeys }
+            ?: reviewQueue().firstOrNull()
+        mainWindowFocusRequest += 1
+        statusLine = if (alert.count == 1) {
+            "Opened newly assigned review"
+        } else {
+            "Opened ${alert.count} newly assigned reviews"
+        }
+    }
+
+    val trayReviewCount: Int
+        get() = if (showReviewCountInTray) reviewQueue().size else 0
 
     fun recordCommandExecution(commandId: CommandId) {
         recentCommandIds = (listOf(commandId) + recentCommandIds.filterNot { it == commandId }).take(6)
@@ -1817,6 +1919,9 @@ class AppState(
         Files.createDirectories(configDir)
         cacheFilePath().writeLines(pullRequests.map(::serializePullRequest))
     }
+
+    private fun cacheBaselineExists(): Boolean =
+        cacheFilePath().exists() || legacyCacheFile.exists()
 
     private fun loadCache(): List<PullRequest> {
         val scoped = cacheFilePath()
@@ -1837,6 +1942,8 @@ class AppState(
             pullRequests = emptyList()
             selectedPullRequest = null
             expandedPullRequestKey = null
+            reviewAssignmentAlert = null
+            reviewAssignmentBaselineEstablished = false
             statusLine = "GitHub account changed · review repository scope"
         }
         githubIdentity = identity
@@ -1975,6 +2082,8 @@ class AppState(
         mutedRepositories = parseLines(mutedRepositoriesText),
         autoRefreshEnabled = autoRefreshEnabled,
         autoRefreshIntervalMinutes = autoRefreshIntervalMinutesText.trim().ifBlank { "5" },
+        showReviewCountInTray = showReviewCountInTray,
+        notifyOnNewReviewAssignments = notifyOnNewReviewAssignments,
         sortMode = sortMode.ifBlank { "Urgency" },
         groupByRepository = groupByRepository,
         staleThresholdDays = staleThresholdDaysText.trim().ifBlank { "2" },
@@ -5384,11 +5493,16 @@ fun installBestEffortTray(state: AppState) {
             return
         }
         val tray = SystemTray.getSystemTray()
-        if (tray.trayIcons.any { it.toolTip == "RevQ" }) {
+        if (tray.trayIcons.any { it.toolTip.orEmpty().startsWith("RevQ") }) {
             state.trayAvailable = true
+            updateTrayReviewCount(state.trayReviewCount, state.showReviewCountInTray)
             return
         }
-        val image = loadRevqTrayImage()
+        val iconSize = trayIconSize()
+        val image = loadRevqTrayImage(
+            reviewCount = state.trayReviewCount,
+            iconSize = iconSize,
+        )
         System.err.println("RevQ tray: icon loaded")
         val popup = PopupMenu()
         popup.add(MenuItem("Show RevQ").apply {
@@ -5417,16 +5531,22 @@ fun installBestEffortTray(state: AppState) {
         })
         popup.addSeparator()
         popup.add(MenuItem("Quit").apply { addActionListener { exitProcess(0) } })
-        val trayIcon = TrayIcon(image, "RevQ", popup).apply {
+        val trayIcon = TrayIcon(
+            image,
+            trayTooltip(state.trayReviewCount, state.showReviewCountInTray),
+            popup,
+        ).apply {
             isImageAutoSize = true
             addActionListener {
                 EventQueue.invokeLater {
                     state.mainWindowVisible = true
                     state.selectView(View.NeedsReview)
+                    state.mainWindowFocusRequest += 1
                 }
             }
         }
         tray.add(trayIcon)
+        AwtTrayController.attach(trayIcon, iconSize)
         System.err.println("RevQ tray: menu and click handlers installed")
         state.trayAvailable = true
         state.statusLine = "RevQ tray installed"
@@ -5437,11 +5557,15 @@ fun installBestEffortTray(state: AppState) {
     }
 }
 
-private fun loadRevqTrayImage(): java.awt.Image {
+private fun trayIconSize(): Int {
     val osName = System.getProperty("os.name").lowercase()
-    val isMac = osName.contains("mac")
-    return awtTrayImage(if (isMac) 18 else 22)
+    return if (osName.contains("mac")) 18 else 22
 }
+
+private fun loadRevqTrayImage(
+    reviewCount: Int = 0,
+    iconSize: Int = trayIconSize(),
+): java.awt.Image = awtTrayImage(iconSize, reviewCount)
 
 fun trayIconResourceName(darkAppearance: Boolean): String =
     PlatformPresence.trayIconResourceName(darkAppearance)

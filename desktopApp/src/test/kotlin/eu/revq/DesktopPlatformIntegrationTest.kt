@@ -65,6 +65,29 @@ class DesktopPlatformIntegrationTest {
     }
 
     @Test
+    fun trayBadgeUsesExactSingleDigitsAndCapsLargeCounts() {
+        assertEquals("", trayBadgeLabel(0))
+        assertEquals("4", trayBadgeLabel(4))
+        assertEquals("9+", trayBadgeLabel(10))
+        assertEquals("RevQ · 12 reviews waiting", trayTooltip(12, enabled = true))
+    }
+
+    @Test
+    fun reviewCountBadgeAddsVisiblePixelsWithoutChangingCanvasSize() {
+        val plain = loadTrayBufferedImage(44, darkAppearance = true, reviewCount = 0)
+        val badged = loadTrayBufferedImage(44, darkAppearance = true, reviewCount = 3)
+
+        assertEquals(plain.width, badged.width)
+        assertEquals(plain.height, badged.height)
+        assertTrue(
+            (0 until plain.height).any { y ->
+                (0 until plain.width).any { x -> plain.getRGB(x, y) != badged.getRGB(x, y) }
+            },
+            "A non-zero review count should alter the rendered tray pixmap",
+        )
+    }
+
+    @Test
     fun cosmicStatusNotifierPixmapsStayVisibleAtEveryPublishedSize() {
         listOf(22, 32, 44).forEach { size ->
             val onDarkPanel = loadTrayBufferedImage(size, darkAppearance = true)
