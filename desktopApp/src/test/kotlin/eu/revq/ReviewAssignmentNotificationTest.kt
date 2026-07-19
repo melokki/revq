@@ -110,6 +110,24 @@ class ReviewAssignmentNotificationTest {
     }
 
 
+
+    @Test
+    fun notificationSettingsActionDismissesAlertAndFocusesNotificationSettings() {
+        val state = AppState().apply {
+            mainWindowVisible = false
+            enqueueReviewAssignmentAlert(listOf(pullRequest(1)))
+        }
+
+        state.openNotificationSettingsFromAssignmentAlert()
+
+        assertNull(state.reviewAssignmentAlert)
+        assertEquals(true, state.mainWindowVisible)
+        assertEquals(View.Settings, state.view)
+        assertEquals(SettingsSection.Notifications.ordinal, state.settingsSectionIndex)
+        assertEquals(0, state.settingsFocusedRowIndex)
+        assertEquals(1, state.mainWindowFocusRequest)
+    }
+
     @Test
     fun activeMainWindowUsesBannerWhileHiddenOrSettingsUsesWindow() {
         assertEquals(

@@ -80,6 +80,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.Dp
@@ -1723,9 +1724,30 @@ class AppState(
     }
 
     fun openTrackingSettings() {
-        settingsSectionIndex = 2
+        openSettingsSection(SettingsSection.Tracking)
+    }
+
+    fun openNotificationSettings() {
+        openSettingsSection(SettingsSection.Notifications)
+        statusLine = "Notification settings opened"
+    }
+
+    fun openNotificationSettingsFromAssignmentAlert() {
+        dismissReviewAssignmentAlert()
+        openNotificationSettings()
+    }
+
+    fun openNotificationSettingsFromReminder() {
+        closeReminderWindow()
+        openNotificationSettings()
+    }
+
+    private fun openSettingsSection(section: SettingsSection) {
+        settingsSectionIndex = section.ordinal
         settingsFocusedRowIndex = 0
+        mainWindowVisible = true
         selectView(View.Settings)
+        mainWindowFocusRequest += 1
     }
 
     fun showSidebarNavigationHintOnce() {
@@ -5072,15 +5094,18 @@ fun EmptyState(state: AppState) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    spec.title,
+                    text = spec.title,
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.headlineSmall,
+                    textAlign = TextAlign.Center,
                 )
                 Text(
-                    spec.subtitle,
+                    text = spec.subtitle,
                     color = TextMuted,
                     style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.widthIn(max = 520.dp),
                 )
             }
 
@@ -5267,12 +5292,20 @@ internal fun emptyStateSpec(state: AppState): EmptyStateSpec {
     return emptyStateSpec(state.view)
 }
 
+internal object EmptyStateIllustrationMetrics {
+    val Width = 344.dp
+    val Height = 236.dp
+    val NoteCardHeight = 94.dp
+    val PrimaryCardHeight = 184.dp
+    val ChipHeight = 40.dp
+}
+
 @Composable
 internal fun EmptyStateIllustration(spec: EmptyStateSpec) {
     Box(
         modifier = Modifier
-            .width(344.dp)
-            .height(236.dp),
+            .width(EmptyStateIllustrationMetrics.Width)
+            .height(EmptyStateIllustrationMetrics.Height),
     ) {
         Box(
             modifier = Modifier
@@ -5309,7 +5342,8 @@ internal fun EmptyStateIllustration(spec: EmptyStateSpec) {
             modifier = Modifier
                 .align(Alignment.Center)
                 .padding(end = 18.dp, top = 16.dp)
-                .width(188.dp),
+                .width(188.dp)
+                .height(EmptyStateIllustrationMetrics.NoteCardHeight),
             color = Color(0xFF1C2026),
             border = BorderStroke(1.dp, Border),
             shape = RoundedCornerShape(24.dp),
@@ -5326,7 +5360,8 @@ internal fun EmptyStateIllustration(spec: EmptyStateSpec) {
             modifier = Modifier
                 .align(Alignment.Center)
                 .padding(start = 34.dp)
-                .width(208.dp),
+                .width(208.dp)
+                .height(EmptyStateIllustrationMetrics.PrimaryCardHeight),
             color = PanelElevated,
             border = BorderStroke(1.dp, Border),
             shape = RoundedCornerShape(26.dp),
@@ -5360,11 +5395,15 @@ internal fun EmptyStateIllustration(spec: EmptyStateSpec) {
                             color = TextPrimary,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             text = spec.detailLabel,
                             color = TextMuted,
                             style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -5393,7 +5432,8 @@ internal fun EmptyStateIllustration(spec: EmptyStateSpec) {
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 26.dp, end = 28.dp)
-                .width(120.dp),
+                .width(120.dp)
+                .height(EmptyStateIllustrationMetrics.ChipHeight),
             color = Color(0xFF20242A),
             border = BorderStroke(1.dp, Border),
             shape = RoundedCornerShape(18.dp),
@@ -5408,7 +5448,8 @@ internal fun EmptyStateIllustration(spec: EmptyStateSpec) {
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = 32.dp, bottom = 26.dp)
-                .width(144.dp),
+                .width(144.dp)
+                .height(EmptyStateIllustrationMetrics.ChipHeight),
             color = Color(0xFF1C2026),
             border = BorderStroke(1.dp, Border),
             shape = RoundedCornerShape(18.dp),
@@ -5443,7 +5484,9 @@ private fun IllustrationNoteCard(
     compact: Boolean,
 ) {
     Column(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
@@ -5488,7 +5531,9 @@ private fun IllustrationChipCard(
     accent: Color,
 ) {
     Row(
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

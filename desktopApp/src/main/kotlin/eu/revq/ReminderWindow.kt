@@ -528,6 +528,12 @@ private fun ReminderActions(
                 }
             }
         }
+
+        if (state.notificationSoundMode == NotificationSoundMode.Off) {
+            NotificationSoundDisabledHint(
+                onConfigure = state::openNotificationSettingsFromReminder,
+            )
+        }
     }
 }
 
@@ -540,6 +546,14 @@ private fun handleReminderWindowKeyEvent(
 
     if (isNotificationDismissKey(event.key)) {
         state.closeReminderWindow()
+        return true
+    }
+
+    if (
+        state.notificationSoundMode == NotificationSoundMode.Off &&
+        isNotificationSettingsKey(event.key)
+    ) {
+        state.openNotificationSettingsFromReminder()
         return true
     }
 

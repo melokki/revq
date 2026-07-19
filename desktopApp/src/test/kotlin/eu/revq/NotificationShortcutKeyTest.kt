@@ -14,4 +14,12 @@ class NotificationShortcutKeyTest {
         assertFalse(isNotificationDismissKey(Key.Enter))
         assertEquals("Esc / D", NotificationDismissShortcutLabel)
     }
+
+    @Test
+    fun notificationSettingsShortcutUsesNOnly() {
+        assertTrue(isNotificationSettingsKey(Key.N))
+        assertFalse(isNotificationSettingsKey(Key.S))
+        assertFalse(isNotificationSettingsKey(Key.Enter))
+        assertEquals("N", NotificationSettingsShortcutLabel)
+    }
 }

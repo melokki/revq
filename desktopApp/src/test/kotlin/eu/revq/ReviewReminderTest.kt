@@ -6,6 +6,7 @@ import java.time.LocalTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ReviewReminderTest {
     @Test
@@ -54,5 +55,29 @@ class ReviewReminderTest {
         assertEquals(View.NeedsReview, state.view)
         assertEquals(review, state.selectedPullRequest)
     }
+
+
+    @Test
+    fun notificationSettingsActionClosesPreviewWithoutChangingReminderState() {
+        val state = AppState().apply {
+            reminderWindowIsPreview = true
+            showReminderWindow = true
+            reminderDismissedDate = null
+            reminderSnoozedUntil = null
+            mainWindowVisible = false
+        }
+
+        state.openNotificationSettingsFromReminder()
+
+        assertEquals(false, state.showReminderWindow)
+        assertEquals(false, state.reminderWindowIsPreview)
+        assertNull(state.reminderDismissedDate)
+        assertNull(state.reminderSnoozedUntil)
+        assertTrue(state.mainWindowVisible)
+        assertEquals(View.Settings, state.view)
+        assertEquals(SettingsSection.Notifications.ordinal, state.settingsSectionIndex)
+        assertEquals(1, state.mainWindowFocusRequest)
+    }
+
 
 }

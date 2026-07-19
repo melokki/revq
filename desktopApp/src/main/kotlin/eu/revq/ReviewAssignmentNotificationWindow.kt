@@ -213,43 +213,54 @@ private fun ReviewAssignmentRow(pullRequest: PullRequest) {
 
 @Composable
 private fun ReviewAssignmentActions(state: AppState) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xFF121519))
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        TextButton(
-            onClick = state::dismissReviewAssignmentAlert,
-            modifier = Modifier.weight(1f).height(48.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            ShortcutActionLabel(
-                label = "Dismiss",
-                shortcut = NotificationDismissShortcutLabel,
-            )
+            TextButton(
+                onClick = state::dismissReviewAssignmentAlert,
+                modifier = Modifier.weight(1f).height(48.dp),
+            ) {
+                ShortcutActionLabel(
+                    label = "Dismiss",
+                    shortcut = NotificationDismissShortcutLabel,
+                )
+            }
+
+            Button(
+                onClick = state::openReviewQueueFromAssignmentAlert,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Olive,
+                    contentColor = Color(0xFF151812),
+                ),
+                modifier = Modifier.weight(1.4f).height(48.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                ShortcutActionLabel(
+                    label = "Open review queue",
+                    shortcut = "Enter",
+                    tone = ShortcutKeycapTone.OnAccent,
+                    labelColor = Color(0xFF151812),
+                )
+            }
         }
 
-        Button(
-            onClick = state::openReviewQueueFromAssignmentAlert,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Olive,
-                contentColor = Color(0xFF151812),
-            ),
-            modifier = Modifier.weight(1.4f).height(48.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.OpenInNew,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            ShortcutActionLabel(
-                label = "Open review queue",
-                shortcut = "Enter",
-                tone = ShortcutKeycapTone.OnAccent,
-                labelColor = Color(0xFF151812),
+        if (state.notificationSoundMode == NotificationSoundMode.Off) {
+            NotificationSoundDisabledHint(
+                onConfigure = state::openNotificationSettingsFromAssignmentAlert,
             )
         }
     }
@@ -263,6 +274,14 @@ internal fun handleReviewAssignmentAlertKeyEvent(
 
     if (isNotificationDismissKey(event.key)) {
         state.dismissReviewAssignmentAlert()
+        return true
+    }
+
+    if (
+        state.notificationSoundMode == NotificationSoundMode.Off &&
+        isNotificationSettingsKey(event.key)
+    ) {
+        state.openNotificationSettingsFromAssignmentAlert()
         return true
     }
 
