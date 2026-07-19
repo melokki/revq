@@ -5,18 +5,44 @@ import kotlin.test.assertEquals
 
 class SettingsKeyboardModelTest {
     @Test
-    fun generalKeyboardRowsIncludeTrayAndAssignmentNotificationSettings() {
+    fun generalKeyboardRowsContainOnlyGeneralWorkspaceSettings() {
         assertEquals(
             listOf(
                 "Auto refresh",
                 "Refresh interval",
-                "Review count in tray",
-                "New review assignment notifications",
                 "Row density",
                 "Default grouping",
             ),
             settingsRowLabels(SettingsSection.General),
         )
+    }
+
+    @Test
+    fun notificationKeyboardRowsMatchTheDedicatedNotificationSection() {
+        assertEquals(
+            listOf(
+                "Review count in tray",
+                "New review assignment notifications",
+                "Notification sound",
+                "Custom WAV file",
+                "Test sound",
+            ),
+            settingsRowLabels(SettingsSection.Notifications),
+        )
+    }
+
+
+    @Test
+    fun activatingNotificationSoundRowCyclesSoundMode() {
+        val state = AppState().apply {
+            settingsSectionIndex = SettingsSection.Notifications.ordinal
+            settingsFocusedRowIndex = settingsRowLabels(SettingsSection.Notifications).indexOf("Notification sound")
+            notificationSoundMode = NotificationSoundMode.Default
+        }
+
+        activateFocusedSettingsRow(state)
+
+        assertEquals(NotificationSoundMode.Custom, state.notificationSoundMode)
     }
 
     @Test

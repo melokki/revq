@@ -7,6 +7,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.ui.graphics.vector.ImageVector
 
 enum class SettingsSection(
@@ -17,6 +18,7 @@ enum class SettingsSection(
     GitHub("GitHub", Icons.Rounded.Code),
     Tracking("Tracking", Icons.Rounded.Folder),
     Review("Review", Icons.Rounded.Tune),
+    Notifications("Notifications", Icons.Rounded.VolumeUp),
     Reminders("Reminders", Icons.Rounded.Notifications),
     Data("Data & diagnostics", Icons.Rounded.DataObject),
 }
@@ -37,14 +39,6 @@ private fun settingsRows(section: SettingsSection): List<SettingsInteractionRow>
                 state.autoRefreshIntervalMinutesText = it
                 state.saveConfig()
             }
-        },
-        SettingsInteractionRow("Review count in tray") {
-            it.showReviewCountInTray = !it.showReviewCountInTray
-            it.saveConfig()
-        },
-        SettingsInteractionRow("New review assignment notifications") {
-            it.notifyOnNewReviewAssignments = !it.notifyOnNewReviewAssignments
-            it.saveConfig()
         },
         SettingsInteractionRow("Row density") {
             it.compactRows = !it.compactRows
@@ -90,6 +84,25 @@ private fun settingsRows(section: SettingsSection): List<SettingsInteractionRow>
                 state.saveConfig()
             }
         },
+    )
+
+    SettingsSection.Notifications -> listOf(
+        SettingsInteractionRow("Review count in tray") {
+            it.showReviewCountInTray = !it.showReviewCountInTray
+            it.saveConfig()
+        },
+        SettingsInteractionRow("New review assignment notifications") {
+            it.notifyOnNewReviewAssignments = !it.notifyOnNewReviewAssignments
+            it.saveConfig()
+        },
+        SettingsInteractionRow("Notification sound") { state ->
+            cycleValue(state.notificationSoundMode, NotificationSoundMode.entries) {
+                state.notificationSoundMode = it
+                state.saveConfig()
+            }
+        },
+        SettingsInteractionRow("Custom WAV file", AppState::chooseCustomNotificationSound),
+        SettingsInteractionRow("Test sound", AppState::testNotificationSound),
     )
 
     SettingsSection.Reminders -> listOf(
@@ -170,13 +183,14 @@ fun moveSettingsRow(
 fun activateFocusedSettingsRow(state: AppState) {
     settingsRows(currentSettingsSection(state))
         .getOrNull(state.settingsFocusedRowIndex)
-        ?.activate(state)
+        ?.activate
+        ?.invoke(state)
 }
 
-private fun cycleValue(
-    current: String,
-    values: List<String>,
-    setValue: (String) -> Unit,
+private fun <T> cycleValue(
+    current: T,
+    values: List<T>,
+    setValue: (T) -> Unit,
 ) {
     val index = values.indexOf(current).takeIf { it >= 0 } ?: 0
     setValue(values[(index + 1) % values.size])

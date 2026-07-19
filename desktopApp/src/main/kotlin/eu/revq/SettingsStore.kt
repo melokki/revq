@@ -17,6 +17,8 @@ data class RevqSettings(
     val autoRefreshIntervalMinutes: String = "5",
     val showReviewCountInTray: Boolean = true,
     val notifyOnNewReviewAssignments: Boolean = true,
+    val notificationSoundMode: NotificationSoundMode = NotificationSoundMode.Default,
+    val customNotificationSoundPath: String = "",
     val sortMode: String = "Urgency",
     val groupByRepository: Boolean = false,
     val staleThresholdDays: String = "2",
@@ -67,6 +69,8 @@ class FileSettingsStore(
         autoRefreshIntervalMinutes = value("auto-refresh-interval-minutes.txt", "5"),
         showReviewCountInTray = boolean("show-review-count-in-tray.txt", true),
         notifyOnNewReviewAssignments = boolean("notify-on-new-review-assignments.txt", true),
+        notificationSoundMode = NotificationSoundMode.fromPersisted(value("notification-sound-mode.txt", "default")),
+        customNotificationSoundPath = value("custom-notification-sound-path.txt", ""),
         sortMode = value("sort-mode.txt", "Urgency"),
         groupByRepository = boolean("group-by-repository.txt", false),
         staleThresholdDays = value("stale-threshold-days.txt", "2"),
@@ -98,6 +102,8 @@ class FileSettingsStore(
         write("auto-refresh-interval-minutes.txt", listOf(settings.autoRefreshIntervalMinutes))
         write("show-review-count-in-tray.txt", listOf(settings.showReviewCountInTray.toString()))
         write("notify-on-new-review-assignments.txt", listOf(settings.notifyOnNewReviewAssignments.toString()))
+        write("notification-sound-mode.txt", listOf(settings.notificationSoundMode.persistedValue))
+        writeOptional("custom-notification-sound-path.txt", settings.customNotificationSoundPath)
         write("sort-mode.txt", listOf(settings.sortMode))
         write("group-by-repository.txt", listOf(settings.groupByRepository.toString()))
         write("stale-threshold-days.txt", listOf(settings.staleThresholdDays))

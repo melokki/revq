@@ -28,6 +28,8 @@ class SettingsStoreTest {
             autoRefreshIntervalMinutes = "15",
             showReviewCountInTray = false,
             notifyOnNewReviewAssignments = false,
+            notificationSoundMode = NotificationSoundMode.Custom,
+            customNotificationSoundPath = "/tmp/revq-alert.wav",
             sortMode = "Updated newest",
             groupByRepository = true,
             staleThresholdDays = "5",

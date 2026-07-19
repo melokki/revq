@@ -423,6 +423,9 @@ fun main() {
                     position = WindowPosition.Aligned(Alignment.Center),
                 ),
             ) {
+                LaunchedEffect(Unit) {
+                    appState.playScheduledReminderSound()
+                }
                 RevqTheme(uiScale = appState.uiScale) {
                     ReminderWindow(appState)
                 }
@@ -450,6 +453,9 @@ fun main() {
                     position = WindowPosition.Aligned(Alignment.Center),
                 ),
             ) {
+                LaunchedEffect(assignmentAlert.detectedAt) {
+                    appState.playReviewAssignmentSound(assignmentAlert.detectedAt)
+                }
                 RevqTheme(uiScale = appState.uiScale) {
                     ReviewAssignmentNotificationWindow(
                         state = appState,
@@ -566,6 +572,7 @@ class AppState(
     updateService: UpdateService? = null,
     onboardingCoordinator: OnboardingCoordinator? = null,
     applicationLifecycle: ApplicationLifecycle = ApplicationLifecycle {},
+    private val notificationSoundGateway: NotificationSoundGateway = JvmNotificationSoundGateway(),
 ) {
     private val scope = MainScope()
     private val pullRequestIntake = PullRequestIntake(githubIntegration)
@@ -603,6 +610,7 @@ class AppState(
     private var scheduledReminderPending = false
     private var sidebarNavigationHintShownThisSession = false
     private var reviewAssignmentBaselineEstablished = false
+    private var lastPlayedReviewAssignmentSoundAt: Instant? = null
 
     var view: View
         get() = reviewWorkspace.snapshot.view
@@ -720,6 +728,24 @@ class AppState(
             updateSettingsDraft { copy(notifyOnNewReviewAssignments = value) }
             if (!value) reviewAssignmentAlert = null
         }
+    var notificationSoundMode: NotificationSoundMode
+        get() = settingsWorkflow.snapshot.draft.notificationSoundMode
+        set(value) {
+            updateSettingsDraft { copy(notificationSoundMode = value) }
+            notificationSoundFeedback = null
+        }
+    var customNotificationSoundPath: String
+        get() = settingsWorkflow.snapshot.draft.customNotificationSoundPath
+        set(value) {
+            updateSettingsDraft { copy(customNotificationSoundPath = value) }
+            notificationSoundFeedback = null
+        }
+    var notificationSoundFeedback by mutableStateOf<NotificationSoundFeedback?>(null)
+        private set
+    var isTestingNotificationSound by mutableStateOf(false)
+        private set
+    val notificationSoundSource: NotificationSoundSource
+        get() = notificationSoundGateway.resolve(notificationSoundConfiguration())
     var sortMode: String
         get() = reviewWorkspace.snapshot.configuration.sortMode
         set(value) {
@@ -1882,6 +1908,7 @@ class AppState(
             appendLine("auto refresh: $autoRefreshEnabled every ${autoRefreshIntervalMinutesText.ifBlank { "5" }} minutes")
             appendLine("tray review count: $showReviewCountInTray; current ${reviewQueue().size}")
             appendLine("new assignment notifications: $notifyOnNewReviewAssignments; pending ${reviewAssignmentAlert?.count ?: 0}")
+            appendLine("notification sound: ${notificationSoundMode.persistedValue}; ${notificationSoundSource.settingsDescription()}")
             appendLine("reminders: $reminderEnabled at ${reminderTimeText.ifBlank { "09:00" }}; ${reminderStatus}")
             appendLine(displayDiagnostics)
             appendLine("last error: ${lastRefreshError ?: "none"}")
@@ -1928,6 +1955,98 @@ class AppState(
 
     val trayReviewCount: Int
         get() = if (showReviewCountInTray) reviewQueue().size else 0
+
+    fun chooseCustomNotificationSound() {
+        val selected = chooseCustomNotificationWav() ?: return
+        if (!selected.fileName.toString().endsWith(".wav", ignoreCase = true)) {
+            notificationSoundFeedback = NotificationSoundFeedback(
+                message = "Select a WAV file for notification audio.",
+                isWarning = true,
+            )
+            statusLine = notificationSoundFeedback?.message.orEmpty()
+            return
+        }
+        customNotificationSoundPath = selected.toString()
+        notificationSoundMode = NotificationSoundMode.Custom
+        notificationSoundFeedback = NotificationSoundFeedback("Selected ${selected.fileName}")
+        saveConfig()
+    }
+
+    fun clearCustomNotificationSound() {
+        customNotificationSoundPath = ""
+        notificationSoundMode = NotificationSoundMode.Default
+        notificationSoundFeedback = NotificationSoundFeedback("Custom sound cleared · using the default RevQ sound")
+        saveConfig()
+    }
+
+    fun testNotificationSound() {
+        if (notificationSoundMode == NotificationSoundMode.Off || isTestingNotificationSound) return
+        isTestingNotificationSound = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                notificationSoundGateway.play(notificationSoundConfiguration())
+            }
+            isTestingNotificationSound = false
+            notificationSoundFeedback = playbackFeedback(result, testing = true)
+            statusLine = notificationSoundFeedback?.message ?: "Notification sound test complete"
+        }
+    }
+
+    fun playScheduledReminderSound() {
+        if (reminderWindowIsPreview) return
+        playNotificationWindowSound()
+    }
+
+    fun playReviewAssignmentSound(detectedAt: Instant) {
+        if (lastPlayedReviewAssignmentSoundAt == detectedAt) return
+        lastPlayedReviewAssignmentSoundAt = detectedAt
+        playNotificationWindowSound()
+    }
+
+    private fun playNotificationWindowSound() {
+        if (notificationSoundMode == NotificationSoundMode.Off) return
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                notificationSoundGateway.play(notificationSoundConfiguration())
+            }
+            notificationSoundFeedback = playbackFeedback(result, testing = false)
+        }
+    }
+
+    private fun notificationSoundConfiguration(): NotificationSoundConfiguration =
+        NotificationSoundConfiguration(
+            mode = notificationSoundMode,
+            customWavPath = customNotificationSoundPath,
+        )
+
+    private fun playbackFeedback(
+        result: NotificationSoundPlayback,
+        testing: Boolean,
+    ): NotificationSoundFeedback? = when (result) {
+        NotificationSoundPlayback.Disabled -> if (testing) {
+            NotificationSoundFeedback("Notification sound is off")
+        } else {
+            null
+        }
+        NotificationSoundPlayback.PlayedDefault -> if (testing) {
+            NotificationSoundFeedback("Played the default RevQ sound")
+        } else {
+            null
+        }
+        is NotificationSoundPlayback.PlayedCustom -> if (testing) {
+            NotificationSoundFeedback("Played ${result.path.fileName}")
+        } else {
+            null
+        }
+        is NotificationSoundPlayback.FellBackToDefault -> NotificationSoundFeedback(
+            message = "${result.reason} Played the bundled default sound instead.",
+            isWarning = true,
+        )
+        is NotificationSoundPlayback.Failed -> NotificationSoundFeedback(
+            message = "Notification sound failed: ${result.reason}",
+            isWarning = true,
+        )
+    }
 
     fun recordCommandExecution(commandId: CommandId) {
         recentCommandIds = (listOf(commandId) + recentCommandIds.filterNot { it == commandId }).take(6)
@@ -2122,6 +2241,8 @@ class AppState(
         autoRefreshIntervalMinutes = autoRefreshIntervalMinutesText.trim().ifBlank { "5" },
         showReviewCountInTray = showReviewCountInTray,
         notifyOnNewReviewAssignments = notifyOnNewReviewAssignments,
+        notificationSoundMode = notificationSoundMode,
+        customNotificationSoundPath = customNotificationSoundPath.trim(),
         sortMode = sortMode.ifBlank { "Urgency" },
         groupByRepository = groupByRepository,
         staleThresholdDays = staleThresholdDaysText.trim().ifBlank { "2" },

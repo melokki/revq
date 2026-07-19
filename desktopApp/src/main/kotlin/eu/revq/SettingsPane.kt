@@ -26,15 +26,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.DataObject
-import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -241,6 +237,7 @@ private fun SettingsContent(
                 SettingsSection.GitHub -> GitHubSettings(state)
                 SettingsSection.Tracking -> TrackingSettings(state)
                 SettingsSection.Review -> ReviewSettings(state)
+                SettingsSection.Notifications -> NotificationSettings(state)
                 SettingsSection.Reminders -> ReminderSettings(state)
                 SettingsSection.Data -> DataSettings(state)
             }
@@ -285,29 +282,6 @@ private fun GeneralSettings(state: AppState) {
                 state.saveConfig()
             },
             enabled = state.autoRefreshEnabled,
-        )
-    }
-
-    SettingsSectionLabel("TRAY & NOTIFICATIONS")
-    SettingsGroup {
-        ToggleSettingRow(
-            title = "Review count in tray",
-            description = "Show the global Needs Review count as a badge on the tray icon.",
-            checked = state.showReviewCountInTray,
-            onCheckedChange = {
-                state.showReviewCountInTray = it
-                state.saveConfig()
-            },
-        )
-        SettingsDivider()
-        ToggleSettingRow(
-            title = "New review assignment notifications",
-            description = "Show one aggregated window when a refresh finds reviews newly assigned to you. Scheduled reminders remain independent.",
-            checked = state.notifyOnNewReviewAssignments,
-            onCheckedChange = {
-                state.notifyOnNewReviewAssignments = it
-                state.saveConfig()
-            },
         )
     }
 
@@ -898,6 +872,140 @@ private fun ReviewSettings(state: AppState) {
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(16.dp),
         )
+    }
+}
+
+@Composable
+private fun NotificationSettings(state: AppState) {
+    val source = state.notificationSoundSource
+    val customPath = state.customNotificationSoundPath.trim()
+    val feedback = state.notificationSoundFeedback
+    val warning = source.isWarning || feedback?.isWarning == true
+    val statusMessage = when {
+        source.isWarning -> source.settingsDescription()
+        feedback != null -> feedback.message
+        else -> source.settingsDescription()
+    }
+
+    SettingsSectionHeader(
+        title = "Notifications",
+        subtitle = "Control how RevQ gets your attention when reviews arrive or a reminder becomes due.",
+    )
+
+    SettingsSectionLabel("DELIVERY")
+    SettingsGroup {
+        ToggleSettingRow(
+            title = "Review count in tray",
+            description = "Show the global Needs Review count as a badge on the tray icon.",
+            checked = state.showReviewCountInTray,
+            onCheckedChange = {
+                state.showReviewCountInTray = it
+                state.saveConfig()
+            },
+        )
+        SettingsDivider()
+        ToggleSettingRow(
+            title = "New review assignment notifications",
+            description = "Show one aggregated window when a refresh finds reviews newly assigned to you. Scheduled reminders remain independent.",
+            checked = state.notifyOnNewReviewAssignments,
+            onCheckedChange = {
+                state.notifyOnNewReviewAssignments = it
+                state.saveConfig()
+            },
+        )
+    }
+
+    SettingsSectionLabel("SOUND")
+    SettingsGroup {
+        ChoiceSettingRow(
+            title = "Notification sound",
+            description = "Play a sound for standalone assignment and scheduled reminder windows. Focused-app banners stay silent.",
+            value = state.notificationSoundMode.label,
+            options = NotificationSoundMode.entries,
+            optionLabel = { it.label },
+            onSelected = {
+                state.notificationSoundMode = it
+                state.saveConfig()
+            },
+        )
+
+        SettingsDivider()
+        StaticSettingRow(
+            title = "Custom WAV",
+            value = customPath.ifBlank { "No custom WAV selected" },
+            valueColor = if (state.notificationSoundMode == NotificationSoundMode.Custom && source.isWarning) Amber else TextMuted,
+        )
+        SettingsDivider()
+        ActionSettingRow(
+            title = if (customPath.isBlank()) "Choose custom WAV" else "Change custom WAV",
+            description = "Select a local .wav file. Choosing one switches sound mode to Custom. If the file becomes unavailable, RevQ falls back to the bundled default.",
+            actionLabel = if (customPath.isBlank()) "Choose" else "Change",
+            onClick = state::chooseCustomNotificationSound,
+        )
+        if (customPath.isNotBlank()) {
+            SettingsDivider()
+            ActionSettingRow(
+                title = "Clear custom WAV",
+                description = "Forget the selected file and return to the bundled default RevQ sound.",
+                actionLabel = "Clear",
+                onClick = state::clearCustomNotificationSound,
+            )
+        }
+
+        SettingsDivider()
+        ActionSettingRow(
+            title = "Test sound",
+            description = when (state.notificationSoundMode) {
+                NotificationSoundMode.Off -> "Select Default or Custom before testing notification audio."
+                NotificationSoundMode.Default -> "Play the bundled default WAV once."
+                NotificationSoundMode.Custom -> "Play the custom WAV, falling back to the default when necessary."
+            },
+            actionLabel = if (state.isTestingNotificationSound) "Playing…" else "Test",
+            enabled = state.notificationSoundMode != NotificationSoundMode.Off && !state.isTestingNotificationSound,
+            showProgress = state.isTestingNotificationSound,
+            onClick = state::testNotificationSound,
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (warning) SettingsWarningBg else SettingsSuccessBg,
+        border = BorderStroke(1.dp, Border),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = if (state.notificationSoundMode == NotificationSoundMode.Off) {
+                    Icons.Rounded.VolumeOff
+                } else {
+                    Icons.Rounded.VolumeUp
+                },
+                contentDescription = null,
+                tint = if (warning) Amber else if (state.notificationSoundMode == NotificationSoundMode.Off) TextMuted else ReadyGreen,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = when {
+                        source is NotificationSoundSource.FallbackToDefault -> "Using the default fallback"
+                        warning -> "Notification sound needs attention"
+                        state.notificationSoundMode == NotificationSoundMode.Off -> "Notification sound is off"
+                        else -> "Notification sound is ready"
+                    },
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = statusMessage,
+                    color = TextMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 
