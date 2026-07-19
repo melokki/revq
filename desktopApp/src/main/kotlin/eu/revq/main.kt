@@ -106,6 +106,8 @@ import java.awt.Toolkit
 import java.awt.TrayIcon
 import java.awt.datatransfer.StringSelection
 import java.awt.image.BufferedImage
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -361,6 +363,23 @@ fun main() {
                 focusLifecycle.attach()
                 onDispose(focusLifecycle::close)
             }
+            DisposableEffect(window) {
+                val activationListener = object : WindowAdapter() {
+                    override fun windowActivated(event: WindowEvent?) {
+                        appState.mainWindowActive = true
+                    }
+
+                    override fun windowDeactivated(event: WindowEvent?) {
+                        appState.mainWindowActive = false
+                    }
+                }
+                appState.mainWindowActive = window.isActive
+                window.addWindowListener(activationListener)
+                onDispose {
+                    window.removeWindowListener(activationListener)
+                    appState.mainWindowActive = false
+                }
+            }
             LaunchedEffect(appState.mainWindowVisible) {
                 focusLifecycle.apply(
                     DesktopFocusEvent.VisibilityChanged(appState.mainWindowVisible),
@@ -411,7 +430,14 @@ fun main() {
         }
 
         val assignmentAlert = appState.reviewAssignmentAlert
-        if (assignmentAlert != null && !appState.showReminderWindow) {
+        val assignmentPresentation = reviewAssignmentPresentation(
+            hasAlert = assignmentAlert != null,
+            reminderVisible = appState.showReminderWindow,
+            mainWindowVisible = appState.mainWindowVisible,
+            mainWindowActive = appState.mainWindowActive,
+            view = appState.view,
+        )
+        if (assignmentAlert != null && assignmentPresentation == ReviewAssignmentPresentation.Window) {
             Window(
                 onCloseRequest = appState::dismissReviewAssignmentAlert,
                 title = "RevQ New Review Assignment",
@@ -641,6 +667,7 @@ class AppState(
     var refreshTotal by mutableStateOf(0)
     var lastUndoReview by mutableStateOf<HandledUndo?>(null)
     var mainWindowVisible by mutableStateOf(true)
+    var mainWindowActive by mutableStateOf(false)
     var trayAvailable by mutableStateOf(false)
     var mainWindowFocusRequest by mutableStateOf(0)
     var reminderEnabled: Boolean
@@ -2029,21 +2056,32 @@ class AppState(
         }
     }
 
-    fun startReviewingFromReminder() {
+    fun openReviewQueueFromReminder() {
+        val wasPreview = reminderWindowIsPreview
         reminderWindowIsPreview = false
         showReminderWindow = false
-        reminderSnoozedUntil = null
-        reminderDismissedDate = LocalDate.now().toString()
-        saveReminderState()
-        startReminderScheduler()
+
+        if (!wasPreview) {
+            reminderSnoozedUntil = null
+            reminderDismissedDate = LocalDate.now().toString()
+            saveReminderState()
+            startReminderScheduler()
+        }
+
+        mainWindowVisible = true
+        setQueueScopeFilter(QueueScopeFilter.All)
         selectView(View.NeedsReview)
         selectedPullRequest = reviewQueue().firstOrNull()
-        statusLine = if (selectedPullRequest == null) {
-            "Review reminder handled · review queue clear"
-        } else {
-            "Review reminder handled · review queue opened"
+        mainWindowFocusRequest += 1
+        statusLine = when {
+            wasPreview && selectedPullRequest == null -> "Reminder preview closed · review queue clear"
+            wasPreview -> "Reminder preview closed · review queue opened"
+            selectedPullRequest == null -> "Review reminder handled · review queue clear"
+            else -> "Review reminder handled · review queue opened"
         }
     }
+
+    fun startReviewingFromReminder() = openReviewQueueFromReminder()
 
     fun snoozeReminder() {
         val minutes = reminderSnoozeMinutesText.toLongOrNull()?.coerceIn(5L, 24L * 60L) ?: 60L
@@ -3276,6 +3314,23 @@ fun RevqApp(state: AppState) {
             .focusRequester(rootFocusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
+                val assignmentBannerVisible = reviewAssignmentPresentation(
+                    hasAlert = state.reviewAssignmentAlert != null,
+                    reminderVisible = state.showReminderWindow,
+                    mainWindowVisible = state.mainWindowVisible,
+                    mainWindowActive = state.mainWindowActive,
+                    view = state.view,
+                ) == ReviewAssignmentPresentation.Banner
+
+                if (
+                    assignmentBannerVisible &&
+                    !paletteState.isOpen &&
+                    state.keyboardMode == KeyboardMode.Normal &&
+                    handleReviewAssignmentAlertKeyEvent(event, state)
+                ) {
+                    return@onPreviewKeyEvent true
+                }
+
                 val action = keyboardRouter.route(
                     event = event,
                     context = KeyboardContext(
@@ -3355,12 +3410,20 @@ fun RevqApp(state: AppState) {
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, Border),
                 ) {
-                    Text(
-                        text = "Sidebar · j/k browse · l focus queue",
-                        color = TextPrimary,
-                        style = MaterialTheme.typography.bodySmall,
+                    Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = "Sidebar",
+                            color = TextPrimary,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        ShortcutHint("j / k", "Browse")
+                        ShortcutHint("l", "Focus queue")
+                    }
                 }
             }
 
@@ -3408,6 +3471,22 @@ fun MainPane(state: AppState, modifier: Modifier = Modifier) {
             ),
     ) {
         MainToolbar(state)
+
+        val assignmentAlert = state.reviewAssignmentAlert
+        val assignmentBannerVisible = reviewAssignmentPresentation(
+            hasAlert = assignmentAlert != null,
+            reminderVisible = state.showReminderWindow,
+            mainWindowVisible = state.mainWindowVisible,
+            mainWindowActive = state.mainWindowActive,
+            view = state.view,
+        ) == ReviewAssignmentPresentation.Banner
+        if (assignmentAlert != null && assignmentBannerVisible) {
+            ReviewAssignmentBanner(
+                state = state,
+                alert = assignmentAlert,
+            )
+            Divider(color = Border)
+        }
 
         if (state.isRefreshing) {
             LinearProgressIndicator(
@@ -3507,9 +3586,10 @@ private fun DiscoverableIconAction(
                 containerColor = PanelElevated,
                 contentColor = TextPrimary,
             ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodySmall,
+                ShortcutHint(
+                    shortcut = "Enter",
+                    label = label,
+                    labelColor = TextPrimary,
                 )
             }
         },
@@ -3565,9 +3645,10 @@ private fun DiscoverableMiniIconAction(
                 containerColor = PanelElevated,
                 contentColor = TextPrimary,
             ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodySmall,
+                ShortcutHint(
+                    shortcut = "Enter",
+                    label = label,
+                    labelColor = TextPrimary,
                 )
             }
         },
@@ -3647,8 +3728,9 @@ private fun PaletteSearchHint() {
             tint = TextMuted,
             modifier = Modifier.size(16.dp),
         )
+        ShortcutKeycaps("Space")
         Text(
-            text = "Space to search or filter",
+            text = "Search or filter",
             color = TextMuted,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 1,
@@ -4578,7 +4660,10 @@ fun BottomStatusBar(
                 modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(6.dp))
-            Text("Space Commands", color = TextMuted)
+            ShortcutHint(
+                shortcut = "Space",
+                label = "Commands",
+            )
         }
     }
 }
@@ -4607,22 +4692,10 @@ private fun NavigationFooterHints(state: AppState) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         hints.forEach { (key, label) ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = key,
-                    color = TextPrimary,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = label,
-                    color = TextMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
+            ShortcutHint(
+                shortcut = key,
+                label = label,
+            )
         }
     }
 }

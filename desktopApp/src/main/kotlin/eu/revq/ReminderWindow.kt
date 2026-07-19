@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,10 +31,20 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -43,9 +54,24 @@ import java.time.Instant
 fun ReminderWindow(state: AppState) {
     val queue = state.reviewQueue()
     val first = queue.firstOrNull()
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .focusRequester(focusRequester)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                handleReminderWindowKeyEvent(
+                    event = event,
+                    state = state,
+                    hasReviews = queue.isNotEmpty(),
+                )
+            },
         color = Color(0xFF15181C),
     ) {
         Column(
@@ -424,7 +450,7 @@ private fun ReminderActions(
     ) {
         if (hasReviews) {
             Button(
-                onClick = { state.startReviewingFromReminder() },
+                onClick = { state.openReviewQueueFromReminder() },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Olive,
                     contentColor = Color(0xFF151812),
@@ -439,7 +465,12 @@ private fun ReminderActions(
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Open review queue", fontWeight = FontWeight.Bold)
+                ShortcutActionLabel(
+                    label = "Open review queue",
+                    shortcut = "Enter",
+                    tone = ShortcutKeycapTone.OnAccent,
+                    labelColor = Color(0xFF151812),
+                )
             }
         }
 
@@ -455,7 +486,11 @@ private fun ReminderActions(
                     .fillMaxWidth()
                     .height(48.dp),
             ) {
-                Text("Close preview")
+                ShortcutActionLabel(
+                    label = "Close preview",
+                    shortcut = NotificationDismissShortcutLabel,
+                    labelColor = TextPrimary,
+                )
             }
         } else {
             Row(
@@ -473,7 +508,11 @@ private fun ReminderActions(
                         .weight(1f)
                         .height(48.dp),
                 ) {
-                    Text(reminderSnoozeLabel(state.reminderSnoozeMinutesText))
+                    ShortcutActionLabel(
+                        label = reminderSnoozeLabel(state.reminderSnoozeMinutesText),
+                        shortcut = "S",
+                        labelColor = TextPrimary,
+                    )
                 }
 
                 TextButton(
@@ -482,10 +521,46 @@ private fun ReminderActions(
                         .weight(1f)
                         .height(48.dp),
                 ) {
-                    Text("Dismiss for today", color = TextMuted)
+                    ShortcutActionLabel(
+                        label = "Dismiss for today",
+                        shortcut = NotificationDismissShortcutLabel,
+                    )
                 }
             }
         }
+    }
+}
+
+private fun handleReminderWindowKeyEvent(
+    event: KeyEvent,
+    state: AppState,
+    hasReviews: Boolean,
+): Boolean {
+    if (event.type != KeyEventType.KeyDown) return false
+
+    if (isNotificationDismissKey(event.key)) {
+        state.closeReminderWindow()
+        return true
+    }
+
+    return when (event.key) {
+        Key.Enter -> {
+            if (hasReviews) {
+                state.openReviewQueueFromReminder()
+            } else {
+                state.closeReminderWindow()
+            }
+            true
+        }
+        Key.S -> {
+            if (state.reminderWindowIsPreview) {
+                false
+            } else {
+                state.snoozeReminder()
+                true
+            }
+        }
+        else -> false
     }
 }
 

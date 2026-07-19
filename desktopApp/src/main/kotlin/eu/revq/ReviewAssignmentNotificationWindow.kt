@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,9 +29,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,8 +53,20 @@ fun ReviewAssignmentNotificationWindow(
     state: AppState,
     alert: ReviewAssignmentAlert,
 ) {
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Surface(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .focusRequester(focusRequester)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                handleReviewAssignmentAlertKeyEvent(event, state)
+            },
         color = PanelBg,
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(1.dp, Border),
@@ -202,7 +225,10 @@ private fun ReviewAssignmentActions(state: AppState) {
             onClick = state::dismissReviewAssignmentAlert,
             modifier = Modifier.weight(1f).height(48.dp),
         ) {
-            Text("Dismiss", color = TextMuted)
+            ShortcutActionLabel(
+                label = "Dismiss",
+                shortcut = NotificationDismissShortcutLabel,
+            )
         }
 
         Button(
@@ -219,8 +245,33 @@ private fun ReviewAssignmentActions(state: AppState) {
                 modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(8.dp))
-            Text("Open review queue", fontWeight = FontWeight.Bold)
+            ShortcutActionLabel(
+                label = "Open review queue",
+                shortcut = "Enter",
+                tone = ShortcutKeycapTone.OnAccent,
+                labelColor = Color(0xFF151812),
+            )
         }
+    }
+}
+
+internal fun handleReviewAssignmentAlertKeyEvent(
+    event: KeyEvent,
+    state: AppState,
+): Boolean {
+    if (event.type != KeyEventType.KeyDown || state.reviewAssignmentAlert == null) return false
+
+    if (isNotificationDismissKey(event.key)) {
+        state.dismissReviewAssignmentAlert()
+        return true
+    }
+
+    return when (event.key) {
+        Key.Enter -> {
+            state.openReviewQueueFromAssignmentAlert()
+            true
+        }
+        else -> false
     }
 }
 

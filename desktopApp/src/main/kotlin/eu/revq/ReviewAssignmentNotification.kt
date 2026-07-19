@@ -9,6 +9,25 @@ data class ReviewAssignmentAlert(
     val count: Int get() = pullRequests.size
 }
 
+
+enum class ReviewAssignmentPresentation {
+    Hidden,
+    Banner,
+    Window,
+}
+
+fun reviewAssignmentPresentation(
+    hasAlert: Boolean,
+    reminderVisible: Boolean,
+    mainWindowVisible: Boolean,
+    mainWindowActive: Boolean,
+    view: View,
+): ReviewAssignmentPresentation = when {
+    !hasAlert || reminderVisible -> ReviewAssignmentPresentation.Hidden
+    mainWindowVisible && mainWindowActive && view != View.Settings -> ReviewAssignmentPresentation.Banner
+    else -> ReviewAssignmentPresentation.Window
+}
+
 object ReviewAssignmentNotifications {
     fun newlyAssignedForRefresh(
         baselineEstablished: Boolean,

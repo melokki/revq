@@ -77,6 +77,10 @@ import eu.revq.PanelBg
 import eu.revq.PanelElevated
 import eu.revq.TextMuted
 import eu.revq.TextPrimary
+import eu.revq.ShortcutHint
+import eu.revq.ShortcutKeycapTone
+import eu.revq.ShortcutKeycaps
+import eu.revq.shortcutKeycapPresentation
 import eu.revq.commands.CommandExecutionResult
 import eu.revq.commands.CommandId
 import eu.revq.commands.CommandRegistry
@@ -261,11 +265,9 @@ fun CommandPalette(
                             )
                         },
                         leadingIcon = {
-                            Text(
-                                text = mode.entryLabel,
-                                color = Olive,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.labelLarge,
+                            ShortcutKeycaps(
+                                shortcut = mode.entryLabel,
+                                tone = ShortcutKeycapTone.Accent,
                             )
                         },
                         colors = revqTextFieldColors(),
@@ -335,20 +337,10 @@ private fun PaletteHeader(mode: PaletteMode) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(PanelElevated)
-                .border(1.dp, Border, RoundedCornerShape(8.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            Text(
-                text = mode.entryLabel,
-                color = Olive,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
+        ShortcutKeycaps(
+            shortcut = mode.entryLabel,
+            tone = ShortcutKeycapTone.Accent,
+        )
 
         Column(Modifier.weight(1f)) {
             Text(
@@ -433,6 +425,10 @@ private fun PaletteResultRow(
 ) {
     val icon = paletteResultIcon(result)
     val accessibility = result.accessibility(selected)
+    val visibleShortcut = quickRunLabel ?: result.shortcutLabel?.let(shortcutLabels::localize)
+    val accessibilityLabel = visibleShortcut?.let {
+        "${accessibility.label}. Shortcut ${shortcutKeycapPresentation(it).accessibilityLabel}"
+    } ?: accessibility.label
     val interactionModifier = if (result.actionable) {
         Modifier.clickable(onClick = onClick)
     } else {
@@ -447,7 +443,7 @@ private fun PaletteResultRow(
             .background(if (selected) PanelElevated else Color.Transparent)
             .then(interactionModifier)
             .semantics(mergeDescendants = true) {
-                contentDescription = accessibility.label
+                contentDescription = accessibilityLabel
                 stateDescription = accessibility.stateDescription
                 this.selected = accessibility.selected
                 if (accessibility.button) role = Role.Button
@@ -559,18 +555,10 @@ private fun QuickRunPill(
     label: String,
     selected: Boolean,
 ) {
-    Text(
-        text = label,
-        color = if (selected) Color(0xFF151812) else Olive,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        softWrap = false,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (selected) Olive else Color(0xFF2C3323))
-            .border(1.dp, Olive.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
+    ShortcutKeycaps(
+        shortcut = label,
+        tone = if (selected) ShortcutKeycapTone.OnAccent else ShortcutKeycapTone.Accent,
+        announce = false,
     )
 }
 
@@ -579,18 +567,10 @@ private fun ShortcutPill(
     label: String,
     selected: Boolean,
 ) {
-    Text(
-        text = label,
-        color = if (selected) TextPrimary else TextMuted,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        softWrap = false,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color(0xFF15181C))
-            .border(1.dp, Border, RoundedCornerShape(6.dp))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
+    ShortcutKeycaps(
+        shortcut = label,
+        selected = selected,
+        announce = false,
     )
 }
 
@@ -679,26 +659,10 @@ private fun PaletteFooterHint(
     key: String,
     label: String,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = key,
-            color = TextPrimary,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            softWrap = false,
-        )
-        Text(
-            text = label,
-            color = TextMuted,
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            softWrap = false,
-        )
-    }
+    ShortcutHint(
+        shortcut = key,
+        label = label,
+    )
 }
 
 private fun paletteResultIcon(result: PaletteResult): ImageVector = when (result) {

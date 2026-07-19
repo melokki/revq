@@ -248,8 +248,8 @@ private fun CompactInlineActionStrip(
 
         CompactInlineAction(
             keyLabel = "c",
-            label = "Copy",
-            onClick = { state.copySelectedMarkdown() },
+            label = "Copy URL",
+            onClick = { state.copySelectedUrl() },
         )
     }
 }
@@ -261,19 +261,22 @@ private fun CompactInlineAction(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val shortcutDescription = shortcutKeycapPresentation(keyLabel).accessibilityLabel
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(7.dp))
             .clickable(enabled = enabled, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "$label. Shortcut $shortcutDescription"
+            }
             .padding(horizontal = 7.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
-            text = keyLabel,
-            color = if (enabled) Olive else TextMuted,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
+        ShortcutKeycaps(
+            shortcut = keyLabel,
+            tone = if (enabled) ShortcutKeycapTone.Accent else ShortcutKeycapTone.Neutral,
+            announce = false,
         )
         Text(
             text = label,
@@ -1143,6 +1146,7 @@ private fun ReviewBriefOverflowMenu(
             ThemedMenuItem(
                 icon = Icons.Rounded.Link,
                 title = "Copy URL",
+                shortcut = "C",
                 onClick = {
                     expanded = false
                     state.copySelectedUrl()
@@ -1175,6 +1179,7 @@ private fun ReviewBriefOverflowMenu(
             ThemedMenuItem(
                 icon = if (state.isPinned(pr)) Icons.Rounded.Star else Icons.Rounded.StarBorder,
                 title = if (state.isPinned(pr)) "Unpin pull request" else "Pin pull request",
+                shortcut = "P",
                 onClick = {
                     expanded = false
                     state.togglePin(pr)
@@ -1211,13 +1216,20 @@ private fun ThemedMenuItem(
     title: String,
     onClick: () -> Unit,
     destructive: Boolean = false,
+    shortcut: String? = null,
 ) {
     val contentColor = if (destructive) Amber else TextPrimary
+    val accessibilityLabel = shortcut?.let {
+        "$title. Shortcut ${shortcutKeycapPresentation(it).accessibilityLabel}"
+    } ?: title
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = accessibilityLabel
+            }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1243,22 +1255,13 @@ private fun ThemedMenuItem(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f),
         )
-    }
-}
 
-@Composable
-private fun ShortcutPill(text: String) {
-    Surface(
-        color = Color(0xFF2C3138),
-        shape = RoundedCornerShape(6.dp),
-        border = BorderStroke(1.dp, Border),
-    ) {
-        Text(
-            text = text,
-            color = TextMuted,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
+        shortcut?.let {
+            ShortcutKeycaps(
+                shortcut = it,
+                announce = false,
+            )
+        }
     }
 }
 

@@ -5,6 +5,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class ReviewReminderTest {
     @Test
@@ -25,4 +26,33 @@ class ReviewReminderTest {
 
         assertEquals(ReviewReminderDecision.Suppress("quiet hours"), decision)
     }
+    @Test
+    fun openingQueueFromPreviewDoesNotDismissOrSnoozeTheScheduledReminder() {
+        val review = PullRequest(
+            repository = RepositoryId("acme", "app"),
+            number = 42,
+            title = "Preview review",
+            url = "https://example.test/42",
+            updatedAt = "2026-07-18T08:00:00Z",
+            source = PullRequestSource.ReviewRequest,
+            reviewRequestKind = ReviewRequestKind.Direct,
+        )
+        val state = AppState().apply {
+            pullRequests = listOf(review)
+            reminderWindowIsPreview = true
+            showReminderWindow = true
+            reminderDismissedDate = null
+            reminderSnoozedUntil = null
+        }
+
+        state.openReviewQueueFromReminder()
+
+        assertEquals(false, state.showReminderWindow)
+        assertEquals(false, state.reminderWindowIsPreview)
+        assertNull(state.reminderDismissedDate)
+        assertNull(state.reminderSnoozedUntil)
+        assertEquals(View.NeedsReview, state.view)
+        assertEquals(review, state.selectedPullRequest)
+    }
+
 }

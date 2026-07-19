@@ -786,6 +786,9 @@ private fun AccountMenuAction(
     enabled: Boolean = true,
 ) {
     val contentAlpha = if (enabled) 1f else 0.42f
+    val accessibilityLabel = shortcut?.let {
+        "$label. Shortcut ${shortcutKeycapPresentation(it).accessibilityLabel}"
+    } ?: label
 
     Row(
         modifier = Modifier
@@ -793,6 +796,9 @@ private fun AccountMenuAction(
             .fillMaxWidth()
             .clip(RoundedCornerShape(9.dp))
             .clickable(enabled = enabled, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = accessibilityLabel
+            }
             .padding(horizontal = 10.dp, vertical = 9.dp)
             .alpha(contentAlpha),
         verticalAlignment = Alignment.CenterVertically,
@@ -821,18 +827,11 @@ private fun AccountMenuAction(
             modifier = Modifier.weight(1f),
         )
 
-        if (shortcut != null) {
-            Surface(
-                color = SidebarNeutralBadge,
-                shape = RoundedCornerShape(6.dp),
-            ) {
-                Text(
-                    text = shortcut,
-                    color = TextMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                )
-            }
+        shortcut?.let {
+            ShortcutKeycaps(
+                shortcut = it,
+                announce = false,
+            )
         }
     }
 }

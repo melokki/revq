@@ -5,7 +5,7 @@ data class PaletteShortcutLabels(
 ) {
     fun quickRun(number: Int): String = "$primaryModifier$number"
 
-    val moveAlternative: String = "${primaryModifier}N/P"
+    val moveAlternative: String = "${primaryModifier}N / ${primaryModifier}P"
     val clear: String = "${primaryModifier}U"
 
     fun localize(label: String): String = label
@@ -16,5 +16,5 @@ data class PaletteShortcutLabels(
 fun paletteShortcutLabels(
     osName: String = System.getProperty("os.name").orEmpty(),
 ): PaletteShortcutLabels = PaletteShortcutLabels(
-    primaryModifier = if (osName.contains("mac", ignoreCase = true)) "⌘" else "Ctrl+",
+    primaryModifier = if (osName.contains("mac", ignoreCase = true)) "⌘+" else "Ctrl+",
 )

@@ -189,11 +189,11 @@ class CommandPaletteModelTest {
         val mac = paletteShortcutLabels("Mac OS X")
         val linux = paletteShortcutLabels("Linux")
 
-        assertEquals("⌘1", mac.quickRun(1))
-        assertEquals("⌘N/P", mac.moveAlternative)
-        assertEquals("⌘U", mac.clear)
+        assertEquals("⌘+1", mac.quickRun(1))
+        assertEquals("⌘+N / ⌘+P", mac.moveAlternative)
+        assertEquals("⌘+U", mac.clear)
         assertEquals("Ctrl+1", linux.quickRun(1))
-        assertEquals("Ctrl+N/P", linux.moveAlternative)
+        assertEquals("Ctrl+N / Ctrl+P", linux.moveAlternative)
         assertEquals("Ctrl+U", linux.clear)
     }
 
@@ -306,7 +306,7 @@ class CommandPaletteModelTest {
             PaletteChromePresentation(
                 footerHints = listOf(
                     PaletteFooterHintSpec("↑↓", "Move"),
-                    PaletteFooterHintSpec("Ctrl+N/P", "Move"),
+                    PaletteFooterHintSpec("Ctrl+N / Ctrl+P", "Move"),
                     PaletteFooterHintSpec("Enter", "Confirm"),
                     PaletteFooterHintSpec("Ctrl+1…9", "Run"),
                     PaletteFooterHintSpec("Ctrl+U", "Clear"),

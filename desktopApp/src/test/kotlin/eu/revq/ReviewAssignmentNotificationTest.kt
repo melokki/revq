@@ -109,6 +109,55 @@ class ReviewAssignmentNotificationTest {
         assertEquals(review, state.selectedPullRequest)
     }
 
+
+    @Test
+    fun activeMainWindowUsesBannerWhileHiddenOrSettingsUsesWindow() {
+        assertEquals(
+            ReviewAssignmentPresentation.Banner,
+            reviewAssignmentPresentation(
+                hasAlert = true,
+                reminderVisible = false,
+                mainWindowVisible = true,
+                mainWindowActive = true,
+                view = View.NeedsReview,
+            ),
+        )
+        assertEquals(
+            ReviewAssignmentPresentation.Window,
+            reviewAssignmentPresentation(
+                hasAlert = true,
+                reminderVisible = false,
+                mainWindowVisible = false,
+                mainWindowActive = false,
+                view = View.NeedsReview,
+            ),
+        )
+        assertEquals(
+            ReviewAssignmentPresentation.Window,
+            reviewAssignmentPresentation(
+                hasAlert = true,
+                reminderVisible = false,
+                mainWindowVisible = true,
+                mainWindowActive = true,
+                view = View.Settings,
+            ),
+        )
+    }
+
+    @Test
+    fun visibleReminderDefersBothAssignmentPresentations() {
+        assertEquals(
+            ReviewAssignmentPresentation.Hidden,
+            reviewAssignmentPresentation(
+                hasAlert = true,
+                reminderVisible = true,
+                mainWindowVisible = false,
+                mainWindowActive = false,
+                view = View.NeedsReview,
+            ),
+        )
+    }
+
     private fun pullRequest(
         number: Int,
         repository: RepositoryId = RepositoryId("acme", "app"),
