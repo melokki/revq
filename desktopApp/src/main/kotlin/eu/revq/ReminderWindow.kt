@@ -14,11 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Button
@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -57,6 +58,10 @@ fun ReminderWindow(state: AppState) {
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
+        // Wait until the reminder content has been attached to the window's
+        // focus hierarchy. Requesting focus in the first composition can be
+        // too early, especially when this window is opened from Settings.
+        withFrameNanos { }
         focusRequester.requestFocus()
     }
 
@@ -86,7 +91,6 @@ fun ReminderWindow(state: AppState) {
 
             if (first == null) {
                 ReminderEmptyState(
-                    state = state,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -154,8 +158,11 @@ private fun ReminderHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 28.dp, vertical = 22.dp),
-        verticalAlignment = Alignment.Top,
+            .padding(
+                horizontal = 28.dp,
+                vertical = if (queueSize == 0) 12.dp else 22.dp,
+            ),
+        verticalAlignment = if (queueSize == 0) Alignment.CenterVertically else Alignment.Top,
     ) {
         Column(
             modifier = Modifier.weight(1f),
@@ -180,33 +187,35 @@ private fun ReminderHeader(
                 )
             }
 
-            Text(
-                text = when {
-                    queueSize == 0 -> "Your queue is clear"
-                    queueSize == 1 -> "One review is waiting"
-                    else -> "$queueSize reviews are waiting"
-                },
-                color = TextPrimary,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.headlineSmall,
-            )
+            if (queueSize > 0) {
+                Text(
+                    text = if (queueSize == 1) "One review is waiting" else "$queueSize reviews are waiting",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineSmall,
+                )
 
-            Text(
-                text = when {
-                    queueSize == 0 -> "Nothing needs your review right now."
-                    state.reminderWindowIsPreview -> "This is how RevQ will surface your review queue when a reminder is due."
-                    else -> "Take a focused pass through the queue, or snooze this reminder until later."
-                },
-                color = TextMuted,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+                Text(
+                    text = if (state.reminderWindowIsPreview) {
+                        "This is how RevQ will surface your review queue when a reminder is due."
+                    } else {
+                        "Take a focused pass through the queue, or snooze this reminder until later."
+                    },
+                    color = TextMuted,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
 
-        IconButton(onClick = { state.closeReminderWindow() }) {
+        IconButton(
+            onClick = { state.closeReminderWindow() },
+            modifier = Modifier.size(32.dp),
+        ) {
             Icon(
                 imageVector = Icons.Rounded.Close,
                 contentDescription = if (state.reminderWindowIsPreview) "Close reminder preview" else "Dismiss reminder",
                 tint = TextMuted,
+                modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -402,37 +411,29 @@ private fun ReminderQueueRow(
 
 @Composable
 private fun ReminderEmptyState(
-    state: AppState,
     modifier: Modifier = Modifier,
 ) {
-    val spec = emptyStateSpec(View.NeedsReview)
+    val spec = remember {
+        EmptyStateSpec(
+            eyebrow = "ALL CLEAR",
+            title = "Review queue is empty",
+            subtitle = "You've handled all pending reviews and active pull requests. Great job staying on top of your queue!",
+            accent = Olive,
+            icon = Icons.Rounded.CheckCircle,
+            heroLabel = "Queue cleared",
+            detailLabel = "No pending reviews",
+            primaryLabel = "Open review queue",
+            primaryAction = { it.openReviewQueueFromReminder() },
+        )
+    }
 
     Box(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 28.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 540.dp)
-                .padding(horizontal = 24.dp, vertical = 18.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            EmptyStateIllustration(spec)
-
-            Text(
-                text = "You're caught up.",
-                color = TextPrimary,
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleLarge,
-            )
-
-            Text(
-                text = "Nothing is waiting for your review right now.",
-                color = TextMuted,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
+        EmptyStateIllustration(spec)
     }
 }
 
@@ -441,6 +442,41 @@ private fun ReminderActions(
     state: AppState,
     hasReviews: Boolean,
 ) {
+    if (state.reminderWindowIsPreview && !hasReviews) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF121519))
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (state.notificationSoundMode == NotificationSoundMode.Off) {
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    NotificationSoundDisabledHint(
+                        onConfigure = state::openNotificationSettingsFromReminder,
+                    )
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+
+            TextButton(
+                onClick = { state.closeReminderWindow() },
+                modifier = Modifier.height(36.dp),
+            ) {
+                ShortcutActionLabel(
+                    label = "Close",
+                    shortcut = NotificationDismissShortcutLabel,
+                )
+            }
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -475,22 +511,25 @@ private fun ReminderActions(
         }
 
         if (state.reminderWindowIsPreview) {
-            Button(
-                onClick = { state.closeReminderWindow() },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PanelElevated,
-                    contentColor = TextPrimary,
-                ),
-                border = BorderStroke(1.dp, Border),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
             ) {
-                ShortcutActionLabel(
-                    label = "Close preview",
-                    shortcut = NotificationDismissShortcutLabel,
-                    labelColor = TextPrimary,
-                )
+                Button(
+                    onClick = { state.closeReminderWindow() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = PanelElevated,
+                        contentColor = TextPrimary,
+                    ),
+                    border = BorderStroke(1.dp, Border),
+                    modifier = Modifier.height(38.dp),
+                ) {
+                    ShortcutActionLabel(
+                        label = "Close preview",
+                        shortcut = NotificationDismissShortcutLabel,
+                        labelColor = TextPrimary,
+                    )
+                }
             }
         } else {
             Row(
@@ -544,7 +583,14 @@ private fun handleReminderWindowKeyEvent(
 ): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
 
-    if (isNotificationDismissKey(event.key)) {
+    // Keep these keys local as well as in the shared notification shortcut
+    // helper. This makes the reminder preview independently reliable if that
+    // helper changes or has not yet been updated in another source file.
+    if (
+        event.key == Key.Escape ||
+        event.key == Key.D ||
+        isNotificationDismissKey(event.key)
+    ) {
         state.closeReminderWindow()
         return true
     }

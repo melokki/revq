@@ -11,6 +11,7 @@ import java.io.File
 import javax.imageio.ImageIO
 import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.Struct
+import org.freedesktop.dbus.TypeRef
 import org.freedesktop.dbus.annotations.DBusBoundProperty
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.annotations.DBusMemberName
@@ -32,6 +33,12 @@ interface StatusNotifierWatcher : DBusInterface {
 
 @DBusInterfaceName("org.kde.StatusNotifierItem")
 interface StatusNotifierItem : DBusInterface {
+    @DBusMemberName("NewIcon")
+    class NewIcon(path: String) : DBusSignal(path)
+
+    @DBusMemberName("NewToolTip")
+    class NewToolTip(path: String) : DBusSignal(path)
+
     @DBusBoundProperty(name = "Category")
     fun getCategory(): String
 
@@ -50,19 +57,19 @@ interface StatusNotifierItem : DBusInterface {
     @DBusBoundProperty(name = "IconName")
     fun getIconName(): String
 
-    @DBusBoundProperty(name = "IconPixmap")
+    @DBusBoundProperty(name = "IconPixmap", type = StatusNotifierPixmapList::class)
     fun getIconPixmap(): List<StatusNotifierPixmap>
 
     @DBusBoundProperty(name = "OverlayIconName")
     fun getOverlayIconName(): String
 
-    @DBusBoundProperty(name = "OverlayIconPixmap")
+    @DBusBoundProperty(name = "OverlayIconPixmap", type = StatusNotifierPixmapList::class)
     fun getOverlayIconPixmap(): List<StatusNotifierPixmap>
 
     @DBusBoundProperty(name = "AttentionIconName")
     fun getAttentionIconName(): String
 
-    @DBusBoundProperty(name = "AttentionIconPixmap")
+    @DBusBoundProperty(name = "AttentionIconPixmap", type = StatusNotifierPixmapList::class)
     fun getAttentionIconPixmap(): List<StatusNotifierPixmap>
 
     @DBusBoundProperty(name = "AttentionMovieName")
@@ -83,13 +90,7 @@ interface StatusNotifierItem : DBusInterface {
     fun Scroll(delta: Int, orientation: String)
 }
 
-@DBusInterfaceName("org.kde.StatusNotifierItem")
-@DBusMemberName("NewIcon")
-class StatusNotifierNewIcon(path: String) : DBusSignal(path)
-
-@DBusInterfaceName("org.kde.StatusNotifierItem")
-@DBusMemberName("NewToolTip")
-class StatusNotifierNewToolTip(path: String) : DBusSignal(path)
+internal interface StatusNotifierPixmapList : TypeRef<List<StatusNotifierPixmap>>
 
 class StatusNotifierPixmap(
     @field:Position(0) @JvmField val width: Int,
@@ -236,8 +237,7 @@ object StatusNotifierTray {
             .withShared(false)
             .build()
         val serviceName = "org.freedesktop.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
-        val newItem = RevqStatusNotifierItem(
-            pixmaps = statusNotifierPixmaps(state.trayReviewCount),
+        val newItem = createStatusNotifierItem(
             reviewCount = state.trayReviewCount,
             badgeEnabled = state.showReviewCountInTray,
         ) {
@@ -276,15 +276,26 @@ object StatusNotifierTray {
             badgeEnabled = enabled,
         )
         runCatching {
-            currentConnection.sendMessage(StatusNotifierNewIcon(STATUS_NOTIFIER_ITEM_PATH))
-            currentConnection.sendMessage(StatusNotifierNewToolTip(STATUS_NOTIFIER_ITEM_PATH))
+            currentConnection.sendMessage(StatusNotifierItem.NewIcon(STATUS_NOTIFIER_ITEM_PATH))
+            currentConnection.sendMessage(StatusNotifierItem.NewToolTip(STATUS_NOTIFIER_ITEM_PATH))
         }.onFailure {
             System.err.println("RevQ tray: StatusNotifierItem update failed: ${it.message}")
         }
     }
 }
 
-private class RevqStatusNotifierItem(
+internal fun createStatusNotifierItem(
+    reviewCount: Int,
+    badgeEnabled: Boolean,
+    activate: () -> Unit,
+): RevqStatusNotifierItem = RevqStatusNotifierItem(
+    pixmaps = statusNotifierPixmaps(if (badgeEnabled) reviewCount else 0),
+    reviewCount = reviewCount,
+    badgeEnabled = badgeEnabled,
+    activate = activate,
+)
+
+internal class RevqStatusNotifierItem(
     pixmaps: List<StatusNotifierPixmap>,
     reviewCount: Int,
     badgeEnabled: Boolean,
