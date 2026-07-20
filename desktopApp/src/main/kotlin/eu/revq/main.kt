@@ -62,7 +62,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,7 +105,6 @@ import java.awt.SystemTray
 import java.awt.Toolkit
 import java.awt.TrayIcon
 import java.awt.datatransfer.StringSelection
-import java.awt.image.BufferedImage
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
@@ -114,7 +112,6 @@ import java.io.IOException
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
@@ -129,7 +126,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeoutException
-import javax.imageio.ImageIO
 import kotlin.io.path.exists
 import kotlin.io.path.readLines
 import kotlin.io.path.writeLines
@@ -145,6 +141,7 @@ import eu.revq.keyboard.KeyboardRouter
 import eu.revq.ui.commandpalette.CommandPalette
 import eu.revq.ui.commandpalette.CommandPaletteState
 import eu.revq.ui.commandpalette.PaletteMode
+import kotlin.time.Duration.Companion.milliseconds
 
 private val AppBg = Color(0xFF101215)
 internal val SidebarBg = Color(0xFF15181C)
@@ -192,7 +189,6 @@ private val RevqTypography = Typography(
 
 @Composable
 fun RevqTheme(
-    uiScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
     val nativeDensity = LocalDensity.current
@@ -402,7 +398,7 @@ fun main() {
             LaunchedEffect(Unit) {
                 focusLifecycle.apply(DesktopFocusEvent.HotReload)
             }
-            RevqTheme(uiScale = appState.uiScale) {
+            RevqTheme() {
                 when {
                     !appState.applicationLoaded -> RevqLaunchScreen()
                     appState.onboardingRequired -> OnboardingScreen(appState)
@@ -427,7 +423,7 @@ fun main() {
                 LaunchedEffect(Unit) {
                     appState.playScheduledReminderSound()
                 }
-                RevqTheme(uiScale = appState.uiScale) {
+                RevqTheme() {
                     ReminderWindow(appState)
                 }
             }
@@ -457,7 +453,7 @@ fun main() {
                 LaunchedEffect(assignmentAlert.detectedAt) {
                     appState.playReviewAssignmentSound(assignmentAlert.detectedAt)
                 }
-                RevqTheme(uiScale = appState.uiScale) {
+                RevqTheme() {
                     ReviewAssignmentNotificationWindow(
                         state = appState,
                         alert = assignmentAlert,
@@ -1041,7 +1037,7 @@ class AppState(
             while (true) {
                 val now = ZonedDateTime.now()
                 val next = nextDailyUpdateCheck(now)
-                delay(Duration.between(now, next).toMillis().coerceAtLeast(1_000L))
+                delay(Duration.between(now, next).toMillis().coerceAtLeast(1_000L).milliseconds)
                 withContext(Dispatchers.IO) { checkForUpdatesNow() }
             }
         }
@@ -1096,13 +1092,6 @@ class AppState(
         }
     }
 
-
-    fun setUiScale(scale: Float, label: String) {
-        uiScale = 1.0f
-        densityMode = "OS automatic"
-        Files.deleteIfExists(uiScaleFile)
-        statusLine = "RevQ uses the operating-system display scale automatically"
-    }
 
     fun autoDetectGithubCli() {
         val detected = githubIntegration.detectExecutableResult()
@@ -1436,77 +1425,6 @@ class AppState(
         statusLine = "Tracking $trackedCount ${if (trackedCount == 1) "repository" else "repositories"}"
     }
 
-    fun discoverGitHubScope() {
-        if (isDiscovering) return
-        githubIntegration.configureExecutable(ghPathText)
-        isDiscovering = true
-        repositoryDiscoveryError = null
-        statusLine = "Discovering organizations and repositories…"
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { githubIntegration.discoverScope() }
-            }
-            isDiscovering = false
-            result.onSuccess { discovered ->
-                repositoryDiscovery = discovered
-                repositoryScopeHealth = validateRepositoryScope(
-                    savedRepositories = parseLines(repositoriesText).toSet(),
-                    discoveredRepositories = discovered.repositories,
-                )
-                val existingOrganizations = parseLines(organizationsText)
-                repositoryScopeSelection = RepositoryScopeSelection(
-                    organizationScopes = (
-                            repositoryScopeSelection.organizationScopes +
-                                    existingOrganizations.associateWith { OrganizationScope.All }
-                            ),
-                    individualRepositories = (
-                            repositoryScopeSelection.individualRepositories +
-                                    parseLines(repositoriesText)
-                            ),
-                )
-                statusLine = "Discovered ${discovered.organizations.size} organizations and ${discovered.repositories.count { !it.archived }} repositories"
-            }.onFailure { error ->
-                repositoryDiscoveryError = error.message ?: "Repository discovery failed"
-                statusLine = "Discovery failed · ${repositoryDiscoveryError}"
-            }
-        }
-    }
-
-    fun setOrganizationScope(
-        organization: String,
-        scope: OrganizationScope,
-    ) {
-        repositoryScopeSelection = repositoryScopeSelection.copy(
-            organizationScopes = repositoryScopeSelection.organizationScopes + (organization to scope),
-        )
-    }
-
-    fun toggleDiscoveredRepository(repository: String) {
-        val selected = repositoryScopeSelection.individualRepositories
-        repositoryScopeSelection = repositoryScopeSelection.copy(
-            individualRepositories = if (repository in selected) {
-                selected - repository
-            } else {
-                selected + repository
-            },
-        )
-    }
-
-    fun applyRepositoryScopeSelection() {
-        val discovered = repositoryDiscovery ?: return
-        val active = repositoryScopeSelection
-            .activeRepositories(discovered.repositories)
-            .sorted()
-        repositoriesText = active.joinToString("\n")
-        organizationsText = repositoryScopeSelection.organizationScopes
-            .filterValues { it == OrganizationScope.All }
-            .keys
-            .sorted()
-            .joinToString("\n")
-        saveConfig()
-        statusLine = "Saved repository scope · ${active.size} repositories"
-    }
-
     fun visiblePullRequests(): List<PullRequest> {
         return reviewWorkspace.snapshot.visiblePullRequests
     }
@@ -1670,30 +1588,6 @@ class AppState(
         searchQuery = ""
         setQueueScopeFilter(QueueScopeFilter.All)
         statusLine = "Filter cleared"
-    }
-
-    fun toggleGroupByRepository() {
-        if (view == View.Today) {
-            statusLine = "Today uses fixed sections"
-            return
-        }
-
-        groupByRepository = !groupByRepository
-        saveConfig()
-        statusLine = if (groupByRepository) "Grouped by repository" else "Grouping off"
-    }
-
-    fun toggleCompactRows() {
-        compactRows = !compactRows
-        saveConfig()
-        statusLine = if (compactRows) "Compact rows on" else "Comfortable rows on"
-    }
-
-    fun cycleSortMode() {
-        val currentIndex = WorkspaceSortModes.indexOf(sortMode).takeIf { it >= 0 } ?: 0
-        sortMode = WorkspaceSortModes[(currentIndex + 1) % WorkspaceSortModes.size]
-        saveConfig()
-        statusLine = "Sort: $sortMode"
     }
 
     fun isHandledCurrent(pr: PullRequest): Boolean = handledReviewRecords[pr.key] == pr.updatedMarker
@@ -2407,10 +2301,6 @@ class AppState(
     }
 
     private fun isTodayDismissed(): Boolean = reminderDismissedDate == LocalDate.now().toString()
-
-    private fun isInReminderQuietHours(now: LocalTime = LocalTime.now()): Boolean {
-        return ReviewReminder.isInQuietHours(quietHoursText, now)
-    }
 
     private fun nextReminderInstant(now: Instant): Instant {
         val snooze = reminderSnoozedUntil
